@@ -49,7 +49,10 @@ func (r *Runner) Run(ctx context.Context) error {
 			return ctx.Err()
 		case <-r.Clock.After(fire.Sub(now)):
 		}
-		if err := r.Tick(ctx, window); err != nil {
+		// The tick runs on a context that ignores cancellation, so a shutdown
+		// that arrives mid-evaluation lets the current window finish cleanly.
+		// Store calls are still bounded by the Redis client's own timeouts.
+		if err := r.Tick(context.WithoutCancel(ctx), window); err != nil {
 			r.Logger.Error("evaluation tick failed", slog.Int64("window", window), slog.Any("err", err))
 		}
 	}
