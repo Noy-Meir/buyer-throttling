@@ -61,6 +61,8 @@ type Service struct {
 	tracked   atomic.Int64
 	untracked atomic.Int64
 	counts    sync.Map // buyerID -> *buyerCounts
+	// createMu serialises creation of new buyers. Existing buyers never take it.
+	createMu sync.Mutex
 
 	// summaryMu guards last, the totals at the previous log summary. Summary is
 	// not on the request path.
@@ -142,20 +144,28 @@ func (s *Service) Run(ctx context.Context, req Request) Response {
 
 // countsFor returns the buyer's counters, creating them while under the cap.
 // It returns nil for a buyer beyond the cap, which is counted as untracked.
+//
+// Same structure as the throttler's countersFor. Existing buyers take only the
+// lock-free load. Creation takes createMu and re-checks the map under the lock.
+// Reserving a slot with an atomic add before creating the entry overshot under
+// contention, and a racer for a tracked buyer could be counted as untracked.
 func (s *Service) countsFor(buyerID string) *buyerCounts {
 	if v, ok := s.counts.Load(buyerID); ok {
 		return v.(*buyerCounts)
 	}
-	if s.tracked.Add(1) > int64(s.maxBuyers) {
-		s.tracked.Add(-1)
+	s.createMu.Lock()
+	defer s.createMu.Unlock()
+	if v, ok := s.counts.Load(buyerID); ok {
+		return v.(*buyerCounts)
+	}
+	if s.tracked.Load() >= int64(s.maxBuyers) {
 		s.untracked.Add(1)
 		return nil
 	}
-	v, loaded := s.counts.LoadOrStore(buyerID, &buyerCounts{})
-	if loaded {
-		s.tracked.Add(-1)
-	}
-	return v.(*buyerCounts)
+	c := &buyerCounts{}
+	s.counts.Store(buyerID, c)
+	s.tracked.Add(1)
+	return c
 }
 
 func (s *Service) countResult(buyerID string, result throttler.Result) {
