@@ -30,6 +30,8 @@ const (
 	EnvFlushInterval        = "THROTTLE_FLUSH_INTERVAL"
 	EnvStateRefreshInterval = "THROTTLE_STATE_REFRESH_INTERVAL"
 	EnvMaxStaleness         = "THROTTLE_MAX_STALENESS"
+	EnvStatsTTL             = "THROTTLE_STATS_TTL"
+	EnvMaxBuyers            = "THROTTLE_MAX_BUYERS"
 )
 
 // Config is the validated service configuration. Ratio fields are in basis
@@ -47,6 +49,11 @@ type Config struct {
 	FlushInterval        time.Duration
 	StateRefreshInterval time.Duration
 	MaxStaleness         time.Duration
+
+	// StatsTTL is how long a window's stats key lives after its last write.
+	StatsTTL time.Duration
+	// MaxBuyers caps how many distinct buyers a pod tracks.
+	MaxBuyers int
 }
 
 // Defaults returns the default configuration from the assignment and CLAUDE.md.
@@ -63,6 +70,8 @@ func Defaults() Config {
 		FlushInterval:        time.Second,
 		StateRefreshInterval: 2 * time.Second,
 		MaxStaleness:         5 * time.Minute,
+		StatsTTL:             5 * time.Minute,
+		MaxBuyers:            10000,
 	}
 }
 
@@ -104,9 +113,17 @@ func Load(lookup func(key string) (string, bool)) (Config, error) {
 	setDuration(l, EnvFlushInterval, &cfg.FlushInterval, positive[time.Duration], "must be a positive duration, e.g. 1s")
 	setDuration(l, EnvStateRefreshInterval, &cfg.StateRefreshInterval, positive[time.Duration], "must be a positive duration, e.g. 2s")
 	setDuration(l, EnvMaxStaleness, &cfg.MaxStaleness, positive[time.Duration], "must be a positive duration, e.g. 5m")
+	setDuration(l, EnvStatsTTL, &cfg.StatsTTL, positive[time.Duration], "must be a positive duration, e.g. 5m")
+	setInt(l, EnvMaxBuyers, &cfg.MaxBuyers, positive[int], "must be an integer greater than 0")
 
 	// A step larger than the block level would let one clean window jump
 	// straight from block to 0, which is a cliff rather than a recovery.
+	// Stats must outlive their window plus the grace period, or a window could
+	// expire before the evaluator reads it.
+	if len(l.errs) == 0 && cfg.StatsTTL <= cfg.EvaluationWindow+cfg.Grace {
+		l.errs = append(l.errs, fmt.Errorf("%s: must be greater than %s + %s (the evaluation window and grace)",
+			EnvStatsTTL, EnvEvaluationWindow, EnvGrace))
+	}
 	if len(l.errs) == 0 && cfg.RecoveryStepBP > cfg.BlockLevelBP {
 		l.errs = append(l.errs, fmt.Errorf("%s: must be less than or equal to %s (%.4f)",
 			EnvRecoveryStep, EnvBlockLevel, float64(cfg.BlockLevelBP)/basisPoints))
