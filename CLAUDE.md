@@ -33,9 +33,11 @@ Go 1.22+, Redis 7 + go-redis/v9, Docker multi-stage + docker compose (with healt
 - total == 100 is a valid sample (fewer than 100 is invalid). total == 0 is insufficient (guard divide by zero).
 - Rates are integers in basis points (block 9500, step 1000). Never compare floats. Config takes floats and converts at load.
 - Small-window handling (carry-over): effective stats = window stats + carried stats.
-    - If rate == 0 and effective total < min sample: no change, clear carry (never blocks).
-    - If rate > 0 and effective total < min sample: carry stats forward, hold rate, count carried windows. After 5 carried windows (configurable cap) with still < min: treat as clean, step down, clear carry.
-    - If effective total >= min sample: clear carry, then apply violation / clean logic on the effective stats.
+    - If effective total < min sample (at any rate): carry stats forward, hold the rate, count carried windows. Carry at rate 0 too, so a low-volume buyer can accumulate to min sample and be judged (decided 2026-10-21, replacing "rate 0: no change, clear carry").
+    - Cap: after 5 carried windows (configurable) with still < min: clear the carry without judging it. A throttled buyer steps down as a clean window; a buyer at rate 0 has nothing to step and stays at 0.
+    - A violation is never judged on fewer than min sample calls.
+    - If effective total >= min sample: clear carry, then apply violation / clean logic on the effective stats. Carry never leaks across an evaluated window.
+    - Logs show the window total and the effective (carry-inclusive) total, so held windows are understandable.
 - Reason values: "failure_rate", "timeout_rate", "recovering", "".
 
 ## Failure behavior (fail-open everywhere)
