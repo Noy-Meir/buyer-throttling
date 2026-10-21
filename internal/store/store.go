@@ -5,6 +5,7 @@ package store
 
 import (
 	"context"
+	"time"
 
 	"github.com/Noy-Meir/buyer-throttling/internal/evaluator"
 )
@@ -53,4 +54,11 @@ type Store interface {
 	// window is later than the last evaluated window. It reports whether the
 	// write happened; false means that window was already evaluated.
 	CompareAndSetState(ctx context.Context, buyerID string, window int64, next evaluator.State) (bool, error)
+}
+
+// WindowIndex returns the index of the window containing t, counting whole
+// windows since the Unix epoch. Stats keys use it, so pods and the evaluator
+// must agree on the window size.
+func WindowIndex(t time.Time, window time.Duration) int64 {
+	return t.UnixNano() / int64(window)
 }

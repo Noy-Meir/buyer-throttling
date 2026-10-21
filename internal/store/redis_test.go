@@ -288,3 +288,11 @@ func TestCompareAndSetKeysAreIndependentPerBuyer(t *testing.T) {
 		assert.Equal(t, i*100, got.State.ThrottleRateBP)
 	}
 }
+
+func TestWindowIndexCountsWholeWindowsSinceEpoch(t *testing.T) {
+	minute := time.Minute
+	assert.Equal(t, int64(0), WindowIndex(time.Unix(0, 0), minute))
+	assert.Equal(t, int64(0), WindowIndex(time.Unix(59, 999_999_999), minute))
+	assert.Equal(t, int64(1), WindowIndex(time.Unix(60, 0), minute))
+	assert.Equal(t, int64(28_000_000), WindowIndex(time.Unix(1_680_000_000, 0), minute))
+}
