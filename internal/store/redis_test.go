@@ -299,3 +299,38 @@ func TestWindowIndexCountsWholeWindowsSinceEpoch(t *testing.T) {
 	assert.Equal(t, int64(1), WindowIndex(time.Unix(60, 0), minute))
 	assert.Equal(t, int64(28_000_000), WindowIndex(time.Unix(1_680_000_000, 0), minute))
 }
+
+func TestHeartbeatCountsAndReportsMissing(t *testing.T) {
+	ctx := context.Background()
+	s, mr := newTestStore(t)
+
+	_, ok, err := s.Heartbeat(ctx)
+	require.NoError(t, err)
+	assert.False(t, ok, "never created means missing, not zero")
+
+	for want := int64(1); want <= 3; want++ {
+		got, err := s.Beat(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, want, got)
+	}
+	v, ok, err := s.Heartbeat(ctx)
+	require.NoError(t, err)
+	assert.True(t, ok)
+	assert.Equal(t, int64(3), v)
+
+	// A restore from an old snapshot can lose the key entirely.
+	mr.Del(heartbeatKey)
+	_, ok, err = s.Heartbeat(ctx)
+	require.NoError(t, err)
+	assert.False(t, ok, "a lost counter reads as missing")
+}
+
+func TestHeartbeatErrorsWhenRedisIsDown(t *testing.T) {
+	ctx := context.Background()
+	s, mr := newUnretriedStore(t)
+	mr.Close()
+	_, err := s.Beat(ctx)
+	assert.Error(t, err)
+	_, _, err = s.Heartbeat(ctx)
+	assert.Error(t, err)
+}

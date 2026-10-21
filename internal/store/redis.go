@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strconv"
@@ -18,7 +19,8 @@ import (
 //	state:{buyer}           hash  rate, reason, last_window, carry_* fields
 //	buyers                  set   every buyer that has reported stats
 const (
-	buyersKey = "buyers"
+	buyersKey    = "buyers"
+	heartbeatKey = "evaluator:heartbeat"
 
 	fieldOK      = "ok"
 	fieldFailed  = "failed"
@@ -194,6 +196,27 @@ func (s *RedisStore) AllStates(ctx context.Context) ([]Snapshot, error) {
 
 // CompareAndSetState runs casScript. It returns false, with no error, when the
 // window was already evaluated.
+// Beat increments the heartbeat counter. Each completed evaluator tick calls it.
+func (s *RedisStore) Beat(ctx context.Context) (int64, error) {
+	v, err := s.client.Incr(ctx, heartbeatKey).Result()
+	if err != nil {
+		return 0, fmt.Errorf("store: beat: %w", err)
+	}
+	return v, nil
+}
+
+// Heartbeat reads the heartbeat counter. A missing key is ok=false, not an error.
+func (s *RedisStore) Heartbeat(ctx context.Context) (int64, bool, error) {
+	v, err := s.client.Get(ctx, heartbeatKey).Int64()
+	if errors.Is(err, redis.Nil) {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, fmt.Errorf("store: heartbeat: %w", err)
+	}
+	return v, true, nil
+}
+
 func (s *RedisStore) CompareAndSetState(ctx context.Context, buyerID string, window int64, next evaluator.State) (bool, error) {
 	n, err := casScript.Run(ctx, s.client, []string{stateKey(buyerID)},
 		window,

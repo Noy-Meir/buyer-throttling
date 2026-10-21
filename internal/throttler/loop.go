@@ -145,4 +145,28 @@ func (t *Throttler) refresh(ctx context.Context) {
 		rates[e.buyerID] = e.rate
 	}
 	t.snap.Store(&snapshot{rates: rates, refreshedAt: t.clock.Now()})
+	t.observeHeartbeat(ctx)
+}
+
+// observeHeartbeat reads the evaluator's counter and, when it has changed,
+// records the pod's own time of the change. A missing counter is "not
+// changing": nothing is updated, so the last change ages and the pod fails open
+// after MaxStaleness. A read error is counted as a refresh failure.
+func (t *Throttler) observeHeartbeat(ctx context.Context) {
+	now := t.clock.Now().UnixNano()
+	if t.hbChangedAt.Load() == 0 {
+		// The first successful refresh starts the staleness clock, so a
+		// missing counter fails open MaxStaleness after start, not at once.
+		t.hbChangedAt.Store(now)
+	}
+	v, ok, err := t.store.Heartbeat(ctx)
+	if err != nil {
+		t.refreshFailures.Add(1)
+		t.logger.Warn("heartbeat read failed; evaluator liveness not updated", slog.Any("err", err))
+		return
+	}
+	if ok && v != t.hbSeen.Load() {
+		t.hbSeen.Store(v)
+		t.hbChangedAt.Store(now)
+	}
 }

@@ -38,6 +38,9 @@ type memStore struct {
 	casCalls  int
 	statReads chan int64 // optional: receives the window of each WindowStats read
 	failState map[string]error
+	beats     int64
+	beatErr   error
+	beatDone  chan int64 // optional: receives the counter after each Beat
 }
 
 func newMemStore() *memStore {
@@ -125,6 +128,26 @@ func (m *memStore) CompareAndSetState(_ context.Context, buyer string, window in
 	}
 	m.states[buyer] = store.Snapshot{BuyerID: buyer, State: next, LastEvaluatedWindow: window}
 	return true, nil
+}
+
+// Beat and Heartbeat record the counter in memory, like Redis does.
+func (m *memStore) Beat(context.Context) (int64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.beatErr != nil {
+		return 0, m.beatErr
+	}
+	m.beats++
+	if m.beatDone != nil {
+		m.beatDone <- m.beats
+	}
+	return m.beats, nil
+}
+
+func (m *memStore) Heartbeat(context.Context) (int64, bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.beats, m.beats > 0, nil
 }
 
 func (m *memStore) snapshot(buyer string) store.Snapshot {

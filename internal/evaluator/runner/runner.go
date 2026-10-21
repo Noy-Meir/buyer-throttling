@@ -57,6 +57,7 @@ func (r *Runner) Run(ctx context.Context) error {
 		if err := r.Tick(context.WithoutCancel(ctx), window); err != nil {
 			r.Logger.Error("evaluation tick failed", slog.Int64("window", window), slog.Any("err", err))
 		}
+		r.beat(context.WithoutCancel(ctx))
 	}
 }
 
@@ -73,6 +74,19 @@ func (r *Runner) nextTick(now time.Time) (time.Time, int64) {
 	fire := time.Unix(0, boundary+g)
 	closed := store.WindowIndex(time.Unix(0, boundary-w), r.Window)
 	return fire, closed
+}
+
+// beat advances the heartbeat after a completed tick, even when every window
+// was already evaluated. Pods use it to tell that the evaluator is alive. A
+// failure is logged and counted, and does not stop the loop. The next tick
+// beats again.
+func (r *Runner) beat(ctx context.Context) {
+	if _, err := r.Store.Beat(ctx); err != nil {
+		if r.Observed != nil {
+			r.Observed.RecordHeartbeatFailure()
+		}
+		r.Logger.Error("heartbeat failed", slog.Any("err", err))
+	}
 }
 
 // Tick evaluates window for every known buyer. A failure for one buyer is

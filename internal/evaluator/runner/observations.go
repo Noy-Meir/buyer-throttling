@@ -25,10 +25,25 @@ type Observation struct {
 // evaluated but not observed, and the number of skipped observations is counted.
 // It is written once per buyer per window, which is not a hot path.
 type Observations struct {
-	mu        sync.Mutex
-	max       int
-	buyers    map[string]*Observation
-	untracked int64
+	mu                sync.Mutex
+	max               int
+	buyers            map[string]*Observation
+	untracked         int64
+	heartbeatFailures int64
+}
+
+// RecordHeartbeatFailure counts a heartbeat write that Redis rejected.
+func (o *Observations) RecordHeartbeatFailure() {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.heartbeatFailures++
+}
+
+// HeartbeatFailures returns how many heartbeat writes failed.
+func (o *Observations) HeartbeatFailures() int64 {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.heartbeatFailures
 }
 
 // NewObservations returns an empty set that tracks at most max buyers.

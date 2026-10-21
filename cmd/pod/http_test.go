@@ -31,6 +31,11 @@ type flakyStore struct {
 	state []store.Snapshot
 }
 
+func (f *flakyStore) Beat(context.Context) (int64, error) { return 0, f.call() }
+func (f *flakyStore) Heartbeat(context.Context) (int64, bool, error) {
+	return 0, false, f.call()
+}
+
 func (f *flakyStore) call() error {
 	f.calls.Add(1)
 	if f.down.Load() {

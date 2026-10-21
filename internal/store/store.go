@@ -54,6 +54,15 @@ type Store interface {
 	// window is later than the last evaluated window. It reports whether the
 	// write happened; false means that window was already evaluated.
 	CompareAndSetState(ctx context.Context, buyerID string, window int64, next evaluator.State) (bool, error)
+
+	// Beat advances the evaluator heartbeat counter by one and returns the new
+	// value. The evaluator calls it at the end of every completed tick.
+	Beat(ctx context.Context) (int64, error)
+
+	// Heartbeat reads the heartbeat counter. ok is false when it has never
+	// been created, or was lost in a restore. Callers treat that as "not
+	// changing", not as an error.
+	Heartbeat(ctx context.Context) (value int64, ok bool, err error)
 }
 
 // WindowIndex returns the index of the window containing t, counting whole

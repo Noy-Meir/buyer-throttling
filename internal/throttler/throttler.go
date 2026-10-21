@@ -101,6 +101,14 @@ type Throttler struct {
 
 	snap atomic.Pointer[snapshot]
 
+	// Evaluator liveness. hbSeen is the last heartbeat value read (-1 before
+	// any read). hbChangedAt is the pod's own clock, in Unix nanoseconds, at
+	// which the value last changed, or at the first refresh. Pods fail open
+	// when it is older than MaxStaleness. Only the pod's clock is compared with
+	// itself, so skew between hosts does not matter.
+	hbSeen      atomic.Int64
+	hbChangedAt atomic.Int64
+
 	invalid         atomic.Int64
 	untracked       atomic.Int64
 	flushedCalls    atomic.Int64
@@ -119,7 +127,9 @@ func New(cfg config.Config, st store.Store, clk clock.Clock, rnd Random, logger 
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Throttler{cfg: cfg, store: st, clock: clk, random: rnd, logger: logger}
+	t := &Throttler{cfg: cfg, store: st, clock: clk, random: rnd, logger: logger}
+	t.hbSeen.Store(-1)
+	return t
 }
 
 // ShouldCall reports whether to send a request to buyerID. A buyer with rate
@@ -127,7 +137,7 @@ func New(cfg config.Config, st store.Store, clk clock.Clock, rnd Random, logger 
 // return true. Otherwise the request is skipped with probability rate.
 func (t *Throttler) ShouldCall(buyerID string) bool {
 	snap := t.snap.Load()
-	if snap == nil || t.stale(snap) {
+	if snap == nil || t.stale() {
 		return true
 	}
 	rate := snap.rates[buyerID].rateBP // nil-safe; missing means 0
@@ -246,8 +256,13 @@ func (t *Throttler) countersFor(buyerID string) *counters {
 	return c
 }
 
-func (t *Throttler) stale(snap *snapshot) bool {
-	return t.clock.Now().Sub(snap.refreshedAt) > t.cfg.MaxStaleness
+// stale reports whether the evaluator has gone quiet for longer than
+// MaxStaleness, measured on this pod's clock. A refresh that succeeds without a
+// heartbeat change does not reset it. This is the hot path: one clock read and
+// one atomic load.
+func (t *Throttler) stale() bool {
+	changed := t.hbChangedAt.Load()
+	return t.clock.Now().UnixNano()-changed > t.cfg.MaxStaleness.Nanoseconds()
 }
 
 func validResult(r Result) bool {

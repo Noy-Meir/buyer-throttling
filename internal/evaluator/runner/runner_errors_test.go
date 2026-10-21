@@ -93,3 +93,44 @@ func TestTickLosesRaceToAnotherEvaluatorWithoutOverwriting(t *testing.T) {
 	assert.Empty(t, got, "a lost race is not recorded as our applied decision")
 	assert.NotContains(t, logs.String(), "level=WARN", "no violation is logged for a write we did not make")
 }
+
+// A tick where every window was already evaluated writes nothing, but it is
+// still a completed tick, so the counter advances. Driven through Run with the
+// fake clock, not by calling Tick directly.
+func TestRunAdvancesHeartbeatOnTickThatSkipsEvaluatedWindows(t *testing.T) {
+	clk := clock.NewFake(time.Date(2026, 1, 2, 12, 0, 30, 0, time.UTC))
+	mem := newMemStore()
+	mem.setStats("b", minuteIndex(time.Date(2026, 1, 2, 12, 0, 0, 0, time.UTC)), evaluator.WindowStats{Total: 100})
+	// Mark the buyer as already evaluated past the window Run will pick, so the tick skips.
+	mem.states["b"] = store.Snapshot{BuyerID: "b", LastEvaluatedWindow: 1 << 40}
+	mem.beatDone = make(chan int64, 4)
+	var logs bytes.Buffer
+	r := newRunner(mem, clk, &logs)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- r.Run(ctx) }()
+
+	clk.BlockUntil(1)
+	clk.Advance(35 * time.Second) // 12:01:05: the window 12:00 closes and is evaluated
+	assert.Equal(t, int64(1), <-mem.beatDone, "a skipped tick still beats")
+
+	assert.Equal(t, 0, mem.casCalls, "nothing was written: every window was already evaluated")
+	cancel()
+	assert.ErrorIs(t, <-done, context.Canceled)
+}
+
+// A failed beat is logged and counted. It does not stop the loop.
+func TestBeatFailureIsCountedAndLogged(t *testing.T) {
+	mem := newMemStore()
+	mem.beatErr = errors.New("redis down")
+	var logs bytes.Buffer
+	r := newRunner(mem, clock.NewFake(time.Unix(0, 0)), &logs)
+	r.Observed = NewObservations(10)
+
+	r.beat(context.Background())
+
+	assert.Equal(t, int64(1), r.Observed.HeartbeatFailures())
+	assert.Contains(t, logs.String(), "heartbeat failed")
+}

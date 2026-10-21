@@ -30,6 +30,26 @@ type fakeStore struct {
 	states    []store.Snapshot
 	statesErr error
 	flushed   chan struct{} // optional: signalled after each IncrStats call
+
+	// Heartbeat as the evaluator would leave it. hbPresent false means the key
+	// is missing, as after a restore or before the first tick.
+	hbValue   int64
+	hbPresent bool
+	hbErr     error
+}
+
+func (f *fakeStore) setHeartbeat(value int64, present bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.hbValue, f.hbPresent = value, present
+}
+
+func (f *fakeStore) Beat(context.Context) (int64, error) { return 0, nil }
+
+func (f *fakeStore) Heartbeat(context.Context) (int64, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.hbValue, f.hbPresent, f.hbErr
 }
 
 func (f *fakeStore) IncrStats(_ context.Context, batch []store.Increment) error {
@@ -209,10 +229,13 @@ func TestShouldCallFailsOpenWhenSnapshotIsStale(t *testing.T) {
 	assert.Equal(t, 1, rnd.calls)
 }
 
-func TestFreshRefreshEndsStaleness(t *testing.T) {
+// A successful refresh alone does not end staleness any more. Liveness comes
+// from the evaluator's heartbeat, so a counter change is what ends it.
+func TestCounterChangeEndsStaleness(t *testing.T) {
 	cfg := testConfig()
 	rnd := &scriptedRandom{t: t, values: []int{0}}
 	st := &fakeStore{states: []store.Snapshot{snapFor("b", 9500)}}
+	st.setHeartbeat(1, true)
 	clk := clock.NewFake(testStart)
 	th := newThrottler(t, cfg, st, rnd, clk)
 	th.refresh(context.Background())
@@ -220,8 +243,9 @@ func TestFreshRefreshEndsStaleness(t *testing.T) {
 	clk.Advance(cfg.MaxStaleness + time.Second)
 	require.True(t, th.ShouldCall("b"), "stale: fail open")
 
+	st.setHeartbeat(2, true)
 	th.refresh(context.Background())
-	assert.False(t, th.ShouldCall("b"), "a fresh snapshot is used again")
+	assert.False(t, th.ShouldCall("b"), "a heartbeat change ends staleness")
 }
 
 func TestFlushSendsBatchForCurrentWindowAndResets(t *testing.T) {
