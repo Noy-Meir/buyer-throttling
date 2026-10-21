@@ -88,6 +88,9 @@ func Serve(ctx context.Context, addr string, h http.Handler, logger *slog.Logger
 		Addr:              addr,
 		Handler:           h,
 		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      10 * time.Second,
+		IdleTimeout:       60 * time.Second,
 	}
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {

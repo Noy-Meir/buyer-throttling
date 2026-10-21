@@ -66,7 +66,7 @@ func run(logger *slog.Logger) error {
 	go summaryLoop(ctx, svc, th, logger, summaryEvery)
 
 	logger.Info("pod started", slog.Duration("call_timeout", callTimeout), slog.String("buyers_url", buyersURL))
-	serveErr := app.Serve(ctx, app.Getenv("LISTEN_ADDR", ":8080"), svc.Handler(), logger)
+	serveErr := app.Serve(ctx, app.Getenv("LISTEN_ADDR", ":8080"), podHandler(svc, th), logger)
 
 	// Stop after the server has drained, so the final flush includes every
 	// auction that finished during shutdown.
