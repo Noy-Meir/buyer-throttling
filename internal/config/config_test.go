@@ -33,6 +33,7 @@ func TestLoadDefaults(t *testing.T) {
 	assert.Equal(t, time.Second, cfg.FlushInterval)
 	assert.Equal(t, 2*time.Second, cfg.StateRefreshInterval)
 	assert.Equal(t, 5*time.Minute, cfg.MaxStaleness)
+	assert.Equal(t, time.Hour, cfg.BuyerStateTTL)
 }
 
 func TestLoadOverrides(t *testing.T) {
@@ -83,6 +84,7 @@ func TestLoadOverrides(t *testing.T) {
 				EnvMaxStaleness:         "10m",
 				EnvStatsTTL:             "10m",
 				EnvMaxBuyers:            "50",
+				EnvBuyerStateTTL:        "2h",
 			},
 			check: func(t *testing.T, c Config) {
 				assert.Equal(t, int64(250), c.MinSample)
@@ -94,6 +96,7 @@ func TestLoadOverrides(t *testing.T) {
 				assert.Equal(t, 10*time.Minute, c.MaxStaleness)
 				assert.Equal(t, 10*time.Minute, c.StatsTTL)
 				assert.Equal(t, 50, c.MaxBuyers)
+				assert.Equal(t, 2*time.Hour, c.BuyerStateTTL)
 			},
 		},
 		{
@@ -149,6 +152,8 @@ func TestLoadValidation(t *testing.T) {
 		{"stats TTL of 0 is rejected", EnvStatsTTL, "0s", "positive duration"},
 		{"stats TTL not longer than window plus grace is rejected", EnvStatsTTL, "1m", "must be greater than THROTTLE_EVALUATION_WINDOW + THROTTLE_GRACE"},
 		{"max buyers of 0 is rejected", EnvMaxBuyers, "0", "greater than 0"},
+		{"buyer state TTL of 0 is rejected", EnvBuyerStateTTL, "0s", "positive duration"},
+		{"buyer state TTL not longer than window plus grace is rejected", EnvBuyerStateTTL, "1m", "must be greater than THROTTLE_EVALUATION_WINDOW + THROTTLE_GRACE"},
 		{"max buyers must be an integer", EnvMaxBuyers, "many", "must be an integer greater than 0"},
 	}
 	for _, tc := range tests {
