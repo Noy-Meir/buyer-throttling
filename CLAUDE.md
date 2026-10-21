@@ -5,6 +5,8 @@ Go service that monitors external buyer health in a real-time auction platform a
 ## Source of truth
 The original assignment is in docs/assignment.pdf. It defines the requirements and deliverables. This file records our design decisions for the areas the assignment leaves ambiguous (e.g. the small-window carry-over, staleness, flush failures). Where they conflict on requirements, the assignment wins; where the assignment is silent, the decisions here win. Flag any conflict to me instead of resolving it silently.
 
+Resolved conflict (decided by the author, 2026-10-21, do not reopen): the assignment says a window with fewer requests than the minimum sample "must not trigger a block". We read this rule as applying to a single window. A sample accumulated across carried windows that reaches the minimum can block. Reason: otherwise a low-volume buyer that always fails would never be protected. Recorded in DESIGN.md and docs/decisions.md.
+
 ## Stack
 Go 1.22+, Redis 7 + go-redis/v9, Docker multi-stage + docker compose (with healthchecks), net/http (no web framework), log/slog, prometheus/client_golang, testing + testify + miniredis. No Kubernetes, Kafka, gRPC, ORMs or DI frameworks.
 
