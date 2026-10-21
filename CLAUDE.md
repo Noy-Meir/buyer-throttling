@@ -2,6 +2,9 @@
 
 Go service that monitors external buyer health in a real-time auction platform and controls per-buyer traffic via a throttle rate. Quality bar: depth and clear reasoning over breadth. Every non-obvious decision must be documented in DESIGN.md.
 
+## Source of truth
+The original assignment is in docs/assignment.pdf. It defines the requirements and deliverables. This file records our design decisions for the areas the assignment leaves ambiguous (e.g. the small-window carry-over, staleness, flush failures). Where they conflict on requirements, the assignment wins; where the assignment is silent, the decisions here win. Flag any conflict to me instead of resolving it silently.
+
 ## Stack
 Go 1.22+, Redis 7 + go-redis/v9, Docker multi-stage + docker compose (with healthchecks), net/http (no web framework), log/slog, prometheus/client_golang, testing + testify + miniredis. No Kubernetes, Kafka, gRPC, ORMs or DI frameworks.
 
