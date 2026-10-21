@@ -129,7 +129,7 @@ services:
       BUYERS_URL: "http://buyers:8081"
       SIM_RATE: "100"
       STATS_INTERVAL: "10s"
-      SCENARIO: "30s:buyer_bad:failure_rate=0.8; 150s:buyer_bad:failure_rate=0"
+      SCENARIO: "30s:buyer_bad:failure_rate=0.8; 30s:buyer_quiet:failure_rate=0.8; 150s:buyer_bad:failure_rate=0; 150s:buyer_quiet:failure_rate=0"
     depends_on:
       pod-1:
         condition: service_healthy

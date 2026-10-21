@@ -183,3 +183,10 @@ func TestRoundRobinConcurrentUseIsEven(t *testing.T) {
 }
 
 func quietLogger() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
+
+// The demo's SCENARIO value from docker-compose.yml must keep parsing.
+func TestDemoScenarioParses(t *testing.T) {
+	events, err := ParseScenario("30s:buyer_bad:failure_rate=0.8; 30s:buyer_quiet:failure_rate=0.8; 150s:buyer_bad:failure_rate=0; 150s:buyer_quiet:failure_rate=0")
+	require.NoError(t, err)
+	assert.Len(t, events, 4)
+}
