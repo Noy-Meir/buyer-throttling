@@ -27,6 +27,8 @@ type Runner struct {
 	Window time.Duration
 	Grace  time.Duration
 	Logger *slog.Logger
+	// Observed receives each applied decision for metrics. Nil disables it.
+	Observed *Observations
 }
 
 // New returns a Runner. A nil logger falls back to slog.Default().
@@ -119,6 +121,9 @@ func (r *Runner) evaluateBuyer(ctx context.Context, buyerID string, window int64
 		return nil
 	}
 
+	if r.Observed != nil {
+		r.Observed.Record(buyerID, window, d)
+	}
 	r.logDecision(buyerID, window, stats, prev.State, d)
 	return nil
 }
