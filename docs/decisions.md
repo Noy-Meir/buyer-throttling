@@ -92,6 +92,7 @@ alternative was weighed at the time, the entry says so.
   - Rejected: holding the rate at the cap. Brings back the stuck-forever problem.
   - Consequence (see the oscillation finding below): this is a deliberate trade-off, to be documented in DESIGN.md.
 
+- **Minimum-sample rule read per window (decided, not open).** The assignment says a window with fewer requests than the minimum "must not trigger a block". We read it as applying to a single window. A sample accumulated across carried windows that reaches the minimum can block. Otherwise a low-volume buyer that always fails would never be protected. Recorded in CLAUDE.md as resolved.
 - **Violations are never judged on fewer than the minimum sample.**
   - Enforced by the rule and by a test that checks every rate with a failing short sample.
 
