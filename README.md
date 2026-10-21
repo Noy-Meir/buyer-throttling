@@ -12,7 +12,13 @@ on the same view.
 Requires Docker with Compose.
 
 ```
-make up      # build and start the demo stack in the foreground (Ctrl-C to stop)
+docker compose up --build   # build and start the demo stack in the foreground (Ctrl-C to stop)
+```
+
+`docker-compose up` works on older installs. The Makefile wraps the same commands:
+
+```
+make up      # docker compose up --build
 make down    # stop and remove the stack
 make logs    # follow the evaluator, pod, simulator and buyer logs
 ```
@@ -90,7 +96,7 @@ curl -X POST -H 'Content-Type: application/json' -d '{"failure_rate":0}'   local
 Expected progression for `buyer_bad` (full traffic, judged every window):
 
 1. **Healthy.** `/state` shows rate 0 and an empty reason.
-2. **Blocked, within about one window of the break.** The evaluator logs
+2. **Blocked, within about two windows of the break (about 20 to 25 seconds in the demo).** The evaluator logs
    `level=WARN msg="buyer evaluated" buyer=buyer_bad ... throttle_rate_bp=9500 reason=failure_rate`.
    `/state` shows `0.95` with `failure_rate`. Pod summaries show `skipped` rising to about 95% of invitations.
 3. **Recovering, after the heal.** The evaluator logs `level=INFO` lines with
