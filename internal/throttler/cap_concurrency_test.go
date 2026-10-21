@@ -4,6 +4,7 @@ import (
 	"strconv"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 
@@ -83,5 +84,32 @@ func TestConcurrentNewBuyerWithFreeSlotIsNeverUntracked(t *testing.T) {
 	wg.Wait()
 
 	assert.Equal(t, int64(0), th.Stats().Untracked, "a free slot means no call for this buyer is untracked")
+	assert.Equal(t, int64(1), th.Stats().TrackedBuyers)
+}
+
+// Once the cap is full, a record for a new buyer must not take createMu. The
+// test holds the lock, so any attempt to take it would block and fail the test.
+func TestRecordPastCapDoesNotTakeCreateLock(t *testing.T) {
+	cfg := testConfig()
+	cfg.MaxBuyers = 1
+	th := newThrottler(t, cfg, &fakeStore{}, &scriptedRandom{t: t}, clock.NewFake(testStart))
+	th.Record("first", ResultOK) // fills the cap
+
+	th.createMu.Lock()
+	done := make(chan struct{})
+	go func() {
+		th.Record("second", ResultOK)
+		th.Record("third", ResultOK)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		th.createMu.Unlock()
+		t.Fatal("Record past the cap blocked on createMu")
+	}
+	th.createMu.Unlock()
+
+	assert.Equal(t, int64(2), th.Stats().Untracked)
 	assert.Equal(t, int64(1), th.Stats().TrackedBuyers)
 }

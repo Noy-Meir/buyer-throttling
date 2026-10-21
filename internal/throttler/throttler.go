@@ -223,6 +223,12 @@ func (t *Throttler) countersFor(buyerID string) *counters {
 	if v, ok := t.counters.Load(buyerID); ok {
 		return v.(*counters)
 	}
+	// A full cap stays full, because counters are never removed. Reject here
+	// without the lock, so a flood of unknown buyers past the cap does not
+	// queue on createMu.
+	if t.tracked.Load() >= int64(t.cfg.MaxBuyers) {
+		return nil
+	}
 	t.createMu.Lock()
 	defer t.createMu.Unlock()
 	// A racer may have created this buyer while we waited for the lock.

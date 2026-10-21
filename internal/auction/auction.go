@@ -153,6 +153,11 @@ func (s *Service) countsFor(buyerID string) *buyerCounts {
 	if v, ok := s.counts.Load(buyerID); ok {
 		return v.(*buyerCounts)
 	}
+	// Full stays full: reject without the lock, as in the throttler.
+	if s.tracked.Load() >= int64(s.maxBuyers) {
+		s.untracked.Add(1)
+		return nil
+	}
 	s.createMu.Lock()
 	defer s.createMu.Unlock()
 	if v, ok := s.counts.Load(buyerID); ok {
