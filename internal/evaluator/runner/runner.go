@@ -143,6 +143,11 @@ func (r *Runner) logDecision(buyerID string, window int64, stats evaluator.Windo
 		slog.Int64("total", stats.Total),
 		slog.Int64("failed", stats.Failed),
 		slog.Int64("timeout", stats.Timeout),
+		// Effective is the window plus carried windows. It is the sample the
+		// decision used, so it explains a held window whose own total is small.
+		slog.Int64("effective_total", d.Effective.Total),
+		slog.Int64("effective_failed", d.Effective.Failed),
+		slog.Int64("effective_timeout", d.Effective.Timeout),
 		slog.Int("throttle_rate_bp", d.State.ThrottleRateBP),
 		slog.Int("prev_throttle_rate_bp", prev.ThrottleRateBP),
 		slog.String("reason", string(d.State.Reason)),

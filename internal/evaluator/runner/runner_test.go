@@ -264,7 +264,8 @@ func TestTickEvaluatesEveryKnownBuyerIndependently(t *testing.T) {
 
 	assert.Equal(t, evaluator.State{ThrottleRateBP: 9500, Reason: evaluator.ReasonTimeoutRate}, st.snapshot("bad").State)
 	assert.Equal(t, evaluator.State{}, st.snapshot("good").State)
-	assert.Equal(t, evaluator.State{}, st.snapshot("quiet").State, "no traffic is insufficient, never a block")
+	assert.Equal(t, evaluator.State{CarriedWindows: 1}, st.snapshot("quiet").State,
+		"no traffic is insufficient: it is carried at rate 0, never blocked")
 }
 
 func TestTickContinuesPastOneBuyerError(t *testing.T) {
@@ -383,4 +384,5 @@ func TestTickLogsCarriedSmallWindowAtInfo(t *testing.T) {
 
 	assert.Contains(t, logs.String(), "level=INFO")
 	assert.Contains(t, logs.String(), "carried_windows=1")
+	assert.Contains(t, logs.String(), "effective_total=40")
 }
