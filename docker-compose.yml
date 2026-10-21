@@ -1,0 +1,138 @@
+# Demo stack: a Redis store, one evaluator, two auction pods, three simulated
+# buyers and a traffic simulator. The scenario in `simulator` blocks buyer_bad
+# at 30s and heals it at 150s. Watch the logs; there are no manual steps.
+#
+# Demo numbers (see README for the full explanation):
+#   window 10s, min sample 100, block 0.95, step 0.1 (10 clean windows to recover)
+#   simulator sends 100 auctions/s, split across two pods
+#   buyer_good and buyer_bad are invited to every auction: ~1000 calls per window
+#   buyer_quiet is invited to 5% of auctions: ~50 calls per window, below the
+#   minimum sample, so it exercises carry-over (evaluated every second window)
+
+x-throttle-env: &throttle-env
+  THROTTLE_EVALUATION_WINDOW: "10s"
+  THROTTLE_GRACE: "5s"
+  THROTTLE_FAILURE_THRESHOLD: "0.7"
+  THROTTLE_TIMEOUT_THRESHOLD: "0.3"
+  THROTTLE_MIN_SAMPLE: "100"
+  THROTTLE_BLOCK_LEVEL: "0.95"
+  THROTTLE_RECOVERY_STEP: "0.1"
+  THROTTLE_CARRY_CAP_WINDOWS: "5"
+  THROTTLE_FLUSH_INTERVAL: "1s"
+  THROTTLE_STATE_REFRESH_INTERVAL: "2s"
+  THROTTLE_MAX_STALENESS: "5m"
+  THROTTLE_STATS_TTL: "5m"
+  THROTTLE_MAX_BUYERS: "10000"
+
+x-build: &build
+  context: .
+  dockerfile: Dockerfile
+
+services:
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+
+  buyers:
+    build:
+      <<: *build
+      args:
+        CMD: buyers
+    environment:
+      LISTEN_ADDR: ":8081"
+      TIMEOUT_DELAY: "300ms"
+      # buyer_bad starts healthy and is broken by the scenario.
+      BUYERS: "buyer_good:failure=0,timeout=0,participation=1;buyer_bad:failure=0,timeout=0,participation=1;buyer_quiet:failure=0,timeout=0,participation=0.05"
+    ports:
+      # Admin API on the host, for manual breaks and heals.
+      - "8081:8081"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:8081/healthz"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+
+  evaluator:
+    build:
+      <<: *build
+      args:
+        CMD: evaluator
+    environment:
+      <<: *throttle-env
+      REDIS_ADDR: "redis:6379"
+      LOG_LEVEL: "info"
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  pod-1:
+    build:
+      <<: *build
+      args:
+        CMD: pod
+    environment:
+      <<: *throttle-env
+      POD_ID: "pod-1"
+      LISTEN_ADDR: ":8080"
+      REDIS_ADDR: "redis:6379"
+      BUYERS_URL: "http://buyers:8081"
+      CALL_TIMEOUT: "150ms"
+      SUMMARY_INTERVAL: "5s"
+    depends_on:
+      redis:
+        condition: service_healthy
+      buyers:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:8080/healthz"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+
+  pod-2:
+    build:
+      <<: *build
+      args:
+        CMD: pod
+    environment:
+      <<: *throttle-env
+      POD_ID: "pod-2"
+      LISTEN_ADDR: ":8080"
+      REDIS_ADDR: "redis:6379"
+      BUYERS_URL: "http://buyers:8081"
+      CALL_TIMEOUT: "150ms"
+      SUMMARY_INTERVAL: "5s"
+    depends_on:
+      redis:
+        condition: service_healthy
+      buyers:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:8080/healthz"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+
+  simulator:
+    build:
+      <<: *build
+      args:
+        CMD: simulator
+    environment:
+      AUCTION_URLS: "http://pod-1:8080,http://pod-2:8080"
+      BUYERS_URL: "http://buyers:8081"
+      SIM_RATE: "100"
+      STATS_INTERVAL: "10s"
+      SCENARIO: "30s:buyer_bad:failure_rate=0.8; 150s:buyer_bad:failure_rate=0"
+    depends_on:
+      pod-1:
+        condition: service_healthy
+      pod-2:
+        condition: service_healthy
+      buyers:
+        condition: service_healthy
