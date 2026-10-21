@@ -15,14 +15,17 @@ import (
 	"github.com/Noy-Meir/buyer-throttling/internal/evaluator"
 )
 
-const testStatsTTL = 5 * time.Minute
+const (
+	testStatsTTL = 5 * time.Minute
+	testStateTTL = time.Hour
+)
 
 func newTestStore(t *testing.T) (*RedisStore, *miniredis.Miniredis) {
 	t.Helper()
 	mr := miniredis.RunT(t)
 	client := redis.NewClient(&redis.Options{Addr: mr.Addr()})
 	t.Cleanup(func() { _ = client.Close() })
-	return NewRedisStore(client, testStatsTTL), mr
+	return NewRedisStore(client, testStatsTTL, testStateTTL), mr
 }
 
 func TestIncrStatsAndWindowStatsDeriveTotal(t *testing.T) {

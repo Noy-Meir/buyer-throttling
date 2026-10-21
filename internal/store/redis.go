@@ -37,8 +37,13 @@ const (
 // than the window being written. Redis runs a script atomically, so the check
 // and the write cannot interleave with another evaluator's write.
 //
+// Each successful write also sets the state key's expiry, so an evaluated buyer
+// never expires while it is still being written.
+//
 // KEYS[1] = state key
-// ARGV    = window, rate, reason, carry_total, carry_failed, carry_timeout, carry_windows
+// ARGV    = window, rate, reason, carry_total, carry_failed, carry_timeout,
+//
+//	carry_windows, state TTL in milliseconds
 var casScript = redis.NewScript(`
 local last = tonumber(redis.call('HGET', KEYS[1], 'last_window') or '0')
 local window = tonumber(ARGV[1])
@@ -53,6 +58,7 @@ redis.call('HSET', KEYS[1],
   'carry_failed', ARGV[5],
   'carry_timeout', ARGV[6],
   'carry_windows', ARGV[7])
+redis.call('PEXPIRE', KEYS[1], ARGV[8])
 return 1
 `)
 
@@ -60,12 +66,14 @@ return 1
 type RedisStore struct {
 	client   redis.UniversalClient
 	statsTTL time.Duration
+	stateTTL time.Duration
 }
 
 // NewRedisStore returns a Store backed by client. Stats keys expire statsTTL
 // after their last write, long enough for the evaluator to read a closed window.
-func NewRedisStore(client redis.UniversalClient, statsTTL time.Duration) *RedisStore {
-	return &RedisStore{client: client, statsTTL: statsTTL}
+// The state key and the buyers set expire stateTTL after their last write.
+func NewRedisStore(client redis.UniversalClient, statsTTL, stateTTL time.Duration) *RedisStore {
+	return &RedisStore{client: client, statsTTL: statsTTL, stateTTL: stateTTL}
 }
 
 var _ Store = (*RedisStore)(nil)
@@ -99,6 +107,9 @@ func (s *RedisStore) IncrStats(ctx context.Context, batch []Increment) error {
 			pipe.Expire(ctx, key, s.statsTTL)
 			pipe.SAdd(ctx, buyersKey, inc.BuyerID)
 		}
+		// Refreshed on every batch. The set expires only when no buyer has sent
+		// stats for stateTTL.
+		pipe.Expire(ctx, buyersKey, s.stateTTL)
 		return nil
 	})
 	if err != nil {
@@ -192,6 +203,7 @@ func (s *RedisStore) CompareAndSetState(ctx context.Context, buyerID string, win
 		next.CarriedStats.Failed,
 		next.CarriedStats.Timeout,
 		next.CarriedWindows,
+		s.stateTTL.Milliseconds(),
 	).Int()
 	if err != nil {
 		return false, fmt.Errorf("store: cas state %s: %w", buyerID, err)

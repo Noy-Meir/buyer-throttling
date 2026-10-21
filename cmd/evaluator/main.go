@@ -43,7 +43,7 @@ func run(logger *slog.Logger) error {
 	client := app.NewRedis(app.Getenv("REDIS_ADDR", "localhost:6379"))
 	defer client.Close()
 
-	st := store.NewRedisStore(client, cfg.StatsTTL)
+	st := store.NewRedisStore(client, cfg.StatsTTL, cfg.BuyerStateTTL)
 	obs := runner.NewObservations(cfg.MaxBuyers)
 	r := runner.New(st, clock.Real{}, cfg.EvaluatorParams(), cfg.EvaluationWindow, cfg.Grace, logger)
 	r.Observed = obs

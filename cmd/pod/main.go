@@ -50,7 +50,7 @@ func run(logger *slog.Logger) error {
 	redisClient := app.NewRedis(app.Getenv("REDIS_ADDR", "localhost:6379"))
 	defer redisClient.Close()
 
-	th := throttler.New(cfg, store.NewRedisStore(redisClient, cfg.StatsTTL), clock.Real{}, throttler.SystemRandom{}, logger)
+	th := throttler.New(cfg, store.NewRedisStore(redisClient, cfg.StatsTTL, cfg.BuyerStateTTL), clock.Real{}, throttler.SystemRandom{}, logger)
 	th.Start(ctx) // loads the first snapshot before the server accepts traffic
 
 	// Buyer calls share one transport. Idle connections are kept so each

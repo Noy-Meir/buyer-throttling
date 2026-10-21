@@ -20,7 +20,7 @@ func newUnretriedStore(t *testing.T) (*RedisStore, *miniredis.Miniredis) {
 	mr := miniredis.RunT(t)
 	client := redis.NewClient(&redis.Options{Addr: mr.Addr(), MaxRetries: -1, DialTimeout: 100 * time.Millisecond})
 	t.Cleanup(func() { _ = client.Close() })
-	return NewRedisStore(client, testStatsTTL), mr
+	return NewRedisStore(client, testStatsTTL, testStateTTL), mr
 }
 
 // A pod or evaluator must see Redis errors, not zero values. A zero value
