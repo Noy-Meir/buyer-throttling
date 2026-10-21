@@ -125,24 +125,24 @@ func (t *Throttler) refresh(ctx context.Context) {
 
 	type entry struct {
 		buyerID string
-		rateBP  int
+		rate    rateEntry
 	}
 	var throttled []entry
 	for _, s := range states {
 		if s.State.ThrottleRateBP > 0 {
-			throttled = append(throttled, entry{s.BuyerID, s.State.ThrottleRateBP})
+			throttled = append(throttled, entry{s.BuyerID, rateEntry{s.State.ThrottleRateBP, s.State.Reason}})
 		}
 	}
 	if limit := t.cfg.MaxBuyers; len(throttled) > limit {
-		sort.Slice(throttled, func(i, j int) bool { return throttled[i].rateBP > throttled[j].rateBP })
+		sort.Slice(throttled, func(i, j int) bool { return throttled[i].rate.rateBP > throttled[j].rate.rateBP })
 		t.logger.Warn("throttled buyers exceed cap; lowest rates fail open",
 			slog.Int("throttled", len(throttled)), slog.Int("cap", limit))
 		throttled = throttled[:limit]
 	}
 
-	rates := make(map[string]int, len(throttled))
+	rates := make(map[string]rateEntry, len(throttled))
 	for _, e := range throttled {
-		rates[e.buyerID] = e.rateBP
+		rates[e.buyerID] = e.rate
 	}
 	t.snap.Store(&snapshot{rates: rates, refreshedAt: t.clock.Now()})
 }

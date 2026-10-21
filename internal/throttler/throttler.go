@@ -7,12 +7,14 @@ package throttler
 import (
 	"log/slog"
 	"math/rand/v2"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/Noy-Meir/buyer-throttling/internal/clock"
 	"github.com/Noy-Meir/buyer-throttling/internal/config"
+	"github.com/Noy-Meir/buyer-throttling/internal/evaluator"
 	"github.com/Noy-Meir/buyer-throttling/internal/store"
 )
 
@@ -57,8 +59,21 @@ type Stats struct {
 // snapshot is an immutable view of throttle rates. Readers load it through an
 // atomic pointer and never lock. Only buyers with a rate above zero are kept.
 type snapshot struct {
-	rates       map[string]int // buyer -> rate in basis points
+	rates       map[string]rateEntry
 	refreshedAt time.Time
+}
+
+// rateEntry is one buyer's enforced rate and why it is set.
+type rateEntry struct {
+	rateBP int
+	reason evaluator.Reason
+}
+
+// BuyerState is one buyer as this pod enforces it, for /state and metrics.
+type BuyerState struct {
+	BuyerID string
+	RateBP  int
+	Reason  evaluator.Reason
 }
 
 // counters are one buyer's call outcomes since the last flush.
@@ -113,7 +128,7 @@ func (t *Throttler) ShouldCall(buyerID string) bool {
 	if snap == nil || t.stale(snap) {
 		return true
 	}
-	rate := snap.rates[buyerID] // nil-safe; missing means 0
+	rate := snap.rates[buyerID].rateBP // nil-safe; missing means 0
 	if rate == 0 {
 		return true
 	}
@@ -142,6 +157,44 @@ func (t *Throttler) Record(buyerID string, result Result) {
 	case ResultTimeout:
 		c.timeout.Add(1)
 	}
+}
+
+// States returns every buyer this pod knows about, sorted by ID. A buyer it
+// has seen but that has no throttle snapshot entry is open (rate 0, no reason).
+// It reads only local memory, so the store is not involved.
+func (t *Throttler) States() []BuyerState {
+	seen := map[string]bool{}
+	t.counters.Range(func(k, _ any) bool {
+		seen[k.(string)] = true
+		return true
+	})
+	snap := t.snap.Load()
+	if snap != nil {
+		for id := range snap.rates {
+			seen[id] = true
+		}
+	}
+	out := make([]BuyerState, 0, len(seen))
+	for id := range seen {
+		st := BuyerState{BuyerID: id}
+		if snap != nil {
+			e := snap.rates[id]
+			st.RateBP, st.Reason = e.rateBP, e.reason
+		}
+		out = append(out, st)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].BuyerID < out[j].BuyerID })
+	return out
+}
+
+// SnapshotAge returns how long ago the snapshot was refreshed. ok is false
+// before the first successful refresh.
+func (t *Throttler) SnapshotAge() (age time.Duration, ok bool) {
+	snap := t.snap.Load()
+	if snap == nil {
+		return 0, false
+	}
+	return t.clock.Now().Sub(snap.refreshedAt), true
 }
 
 // Stats returns a point-in-time copy of the internal counters.
