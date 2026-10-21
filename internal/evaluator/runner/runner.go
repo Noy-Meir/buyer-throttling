@@ -123,15 +123,18 @@ func (r *Runner) evaluateBuyer(ctx context.Context, buyerID string, window int64
 	return nil
 }
 
-// logDecision logs the outcome. Violations are warnings, rate changes are info,
-// and steady states are debug, so a watcher sees blocks and recovery without
-// one line per buyer per minute.
+// logDecision logs the outcome. Violations are warnings, rate changes and
+// carried small windows are info, and steady states are debug, so a watcher
+// sees blocks, recovery and carry-over without one line per buyer per window.
 func (r *Runner) logDecision(buyerID string, window int64, stats evaluator.WindowStats, prev evaluator.State, d evaluator.Decision) {
 	level := slog.LevelDebug
 	switch {
 	case d.FailureRateViolated || d.TimeoutRateViolated:
 		level = slog.LevelWarn
 	case d.State.ThrottleRateBP != prev.ThrottleRateBP || d.State.Reason != prev.Reason:
+		level = slog.LevelInfo
+	case d.State.CarriedWindows != prev.CarriedWindows:
+		// A small window was held back. Info, so the carry-over is visible in the demo.
 		level = slog.LevelInfo
 	}
 	r.Logger.LogAttrs(context.Background(), level, "buyer evaluated",

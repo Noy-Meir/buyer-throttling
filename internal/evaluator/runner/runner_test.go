@@ -369,3 +369,18 @@ func TestRunDoesNotBackfillAfterAPause(t *testing.T) {
 	cancel()
 	assert.ErrorIs(t, <-done, context.Canceled)
 }
+
+func TestTickLogsCarriedSmallWindowAtInfo(t *testing.T) {
+	ctx := context.Background()
+	st := newMemStore()
+	var logs bytes.Buffer
+	r := newRunner(st, clock.NewFake(time.Unix(0, 0)), &logs)
+	st.setStats("quiet", 3, evaluator.WindowStats{Total: 40})
+	_, err := st.CompareAndSetState(ctx, "quiet", 2, evaluator.State{ThrottleRateBP: 9500, Reason: evaluator.ReasonFailureRate})
+	require.NoError(t, err)
+
+	require.NoError(t, r.Tick(ctx, 3))
+
+	assert.Contains(t, logs.String(), "level=INFO")
+	assert.Contains(t, logs.String(), "carried_windows=1")
+}
