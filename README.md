@@ -27,6 +27,18 @@ The stack is Redis, the evaluator, two pods, three simulated buyers and a traffi
 simulator. The simulator breaks two buyers at 30s and heals them at 150s, so nothing
 needs to be typed during the demo.
 
+## Why the extras
+
+- **Two `/state` views.** The evaluator shows what it decided, and each pod shows what it
+  enforces. Comparing them shows whether the pods have converged.
+- **Metrics read at scrape time.** A collector reads the existing counters when Prometheus
+  scrapes. The request path never updates a labelled metric, so the metrics cost nothing
+  per auction.
+- **Carry-over.** Without it, a low-volume buyer's sample never reaches the minimum, so it
+  is either never protected or stuck blocked. Carrying small windows lets it be judged.
+- **Idempotent compare-and-set.** A window is applied once, so several evaluators can run
+  side by side without applying a step twice.
+
 ## Configure
 
 The throttling rules are read from `THROTTLE_*` variables, validated at startup, and
