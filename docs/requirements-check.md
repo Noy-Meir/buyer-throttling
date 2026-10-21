@@ -35,7 +35,7 @@ settings. Docker was not started, so nothing below is verified on compose.
 
 | # | Deliverable (assignment) | Implemented in | Proven by | Status | Note |
 |---|---|---|---|---|---|
-| D1 | Design doc: about one page; components; stats and state flow; fast check; multi-pod consistency; trade-offs. | `DESIGN.md` | Read | **PARTIAL** | All sections are present, and the R7 reading is now stated. The file is about 1,220 words, still more than one page with the tables. See F7. |
+| D1 | Design doc: about one page; components; stats and state flow; fast check; multi-pod consistency; trade-offs. | `DESIGN.md` | Read | **PARTIAL** | All sections are present, and the R7 reading is stated. The file is about 1,000 words, including a 285-word decisions table kept in full. That is slightly more than one page. See F7. |
 | D2 | Code: well structured, clear separation of concerns, meaningful interfaces. | Packages `config`, `evaluator`, `evaluator/runner`, `throttler`, `store`, `auction`, `buyersim`, `simulator`, `metrics`, `api`, `clock`; interfaces `Store`, `Clock`, `Random`, `Caller`, `Throttler` | Layout in CLAUDE.md; `go vet`, `make lint` | PASS | |
 | D3 | Tests cover block, recovery steps, snap-back, minimum sample, and the edge cases identified. | `internal/evaluator/evaluator_test.go`, `runner_test.go` | `make test` exits 0 | PASS | The minimum-sample tests check the carry reading (R7), not the literal reading. |
 | D4 | Store: any store that fits. | `internal/store/redis.go`, Lua CAS | `redis_test.go` on miniredis (idempotence, TTL expiry and refresh, concurrency) | PASS | |
@@ -69,6 +69,6 @@ settings. Docker was not started, so nothing below is verified on compose.
 - **F4 (D7).** The timeout path has not run end-to-end. Its tests are at the unit level.
 - **F5 (R11).** Multi-pod convergence has no automated test. It was seen only in a manual local run.
 - **F6 (R13).** No measurement at 100k requests per second. The benchmarks are per process.
-- **F7 (D1).** DESIGN.md is about 1,220 words, more than one page. The length has not been reduced yet.
+- **F7 (D1).** DESIGN.md is about 1,000 words, including the 285-word decisions table, which was kept in full. The rest of the prose was trimmed; reaching about 800 would mean cutting reasoning that backs the decisions, so it stays slightly over one page.
 - **F8 (closed).** The README has a "Why the extras" section.
 - **F9 (H1).** Local commits after `55adf9a` are not pushed. Pushing is your decision.
