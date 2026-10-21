@@ -386,3 +386,17 @@ func TestTickLogsCarriedSmallWindowAtInfo(t *testing.T) {
 	assert.Contains(t, logs.String(), "carried_windows=1")
 	assert.Contains(t, logs.String(), "effective_total=40")
 }
+
+func TestTickLogsCarryAtRateZeroAtDebug(t *testing.T) {
+	ctx := context.Background()
+	st := newMemStore()
+	var logs bytes.Buffer
+	r := newRunner(st, clock.NewFake(time.Unix(0, 0)), &logs)
+	st.setStats("quiet", 3, evaluator.WindowStats{Total: 40})
+
+	require.NoError(t, r.Tick(ctx, 3))
+
+	assert.NotContains(t, logs.String(), "level=INFO", "a low-volume buyer at rate 0 is not news")
+	assert.Contains(t, logs.String(), "level=DEBUG")
+	assert.Contains(t, logs.String(), "carried_windows=1")
+}

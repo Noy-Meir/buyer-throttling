@@ -123,9 +123,10 @@ func (r *Runner) evaluateBuyer(ctx context.Context, buyerID string, window int64
 	return nil
 }
 
-// logDecision logs the outcome. Violations are warnings, rate changes and
-// carried small windows are info, and steady states are debug, so a watcher
-// sees blocks, recovery and carry-over without one line per buyer per window.
+// logDecision logs the outcome. Violations are warnings, rate and reason
+// changes are info, carried small windows are info only while the buyer is
+// throttled, and everything else is debug. A watcher sees blocks, recovery and
+// carry-over during a block without one line per low-volume buyer per window.
 func (r *Runner) logDecision(buyerID string, window int64, stats evaluator.WindowStats, prev evaluator.State, d evaluator.Decision) {
 	level := slog.LevelDebug
 	switch {
@@ -133,8 +134,10 @@ func (r *Runner) logDecision(buyerID string, window int64, stats evaluator.Windo
 		level = slog.LevelWarn
 	case d.State.ThrottleRateBP != prev.ThrottleRateBP || d.State.Reason != prev.Reason:
 		level = slog.LevelInfo
-	case d.State.CarriedWindows != prev.CarriedWindows:
-		// A small window was held back. Info, so the carry-over is visible in the demo.
+	case d.State.CarriedWindows != prev.CarriedWindows && (prev.ThrottleRateBP > 0 || d.State.ThrottleRateBP > 0):
+		// A small window held back during a block or recovery is info: that is
+		// the carry-over the demo wants to show. At rate 0 it is routine for
+		// low-volume buyers, so it stays at debug.
 		level = slog.LevelInfo
 	}
 	r.Logger.LogAttrs(context.Background(), level, "buyer evaluated",
