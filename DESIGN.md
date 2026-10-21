@@ -37,13 +37,7 @@ Benchmarks (i5-1038NG7, `go test -bench`, mean of three runs, 0 allocations):
 | `ShouldCall` | ~117 ns/op | ~21 ns/op |
 | `Record` | ~37 ns/op | ~9 ns/op |
 
-The staleness check stays inside `ShouldCall`. If it moved into the refresher goroutine,
-a hung or dead refresher would leave the flag unchanged, and a pod could enforce an old
-block forever. Checking at call time avoids that. The alternative is cheaper, but the
-figures above are for the whole call, and we did not measure the clock read on its own.
-Fail-open could also be up to one refresh interval late, and the flag adds a failure
-mode. We kept the simpler, safer version: the cost is small compared with the
-150 ms auction budget.
+The staleness check stays inside `ShouldCall`. If it moved into the refresher goroutine, a hung or dead refresher would never flip the flag, and a pod could enforce an old block forever. Checking at call time avoids that. The alternative is cheaper per call, but we did not measure the clock read alone, and fail-open could then lag by up to one refresh interval.
 
 ## How multiple pods stay consistent
 
@@ -54,8 +48,12 @@ the same index without talking to each other.
 Two delays add up, and we report them separately.
 
 - **Detection latency** is the time from a buyer starting to fail to the evaluator
-  blocking it. The worst case is one window plus the grace period, which is about 15
-  seconds in the demo (10-second window, 5-second grace).
+  blocking it. The worst case is almost two windows plus the grace period. A failure
+  that starts near the end of a window leaves that window mostly clean, and the window
+  in which it starts may not cross the threshold, so the next full window decides. With
+  the 10-second window and 5-second grace that is about 25 seconds. The best case is
+  about one window plus grace, about 15 seconds. In the demo we observed about 19
+  seconds (break at 09:02:46, block logged at 09:03:05).
 - **Propagation** is the time from the evaluator's write to every pod holding the new
   state. Each pod picks it up within one refresh interval, 2 seconds by default. This
   propagation delay is the convergence time: once it has passed, all pods enforce the
@@ -67,13 +65,15 @@ bounded: at most one refresh interval after the evaluator writes.
 The guarantee we would not give up is that the evaluator never applies the same window
 twice. The compare-and-set (a Lua script) writes only if the stored last-evaluated
 window is older than the one being written. Timing varies, but each step is still
-correct, so two evaluators racing on one window cannot both apply a step.
+correct, so two evaluators racing on one window cannot both apply a step. The demo
+runs a single evaluator, so concurrent evaluators are covered by the store and runner
+tests, not by the demo.
 
 ## Decisions on the ambiguous cases
 
 | Case | Decision | Why |
 |---|---|---|
-| Window below the minimum sample | Carry its stats forward and hold the rate, at any rate. | A small sample is not evidence. Carrying lets a low-volume buyer reach a judgeable sample. |
+| Window below the minimum sample | Carry its stats forward and hold the rate, at any rate. | We read "fewer than the minimum sample must not trigger a block" as applying to a single window. A sample accumulated across windows that reaches the minimum can block. Otherwise a low-volume buyer that always fails would never be protected. |
 | Carry cap (5 windows) reached | Drop the carry without judging it. A throttled buyer steps down one recovery step; a buyer at rate 0 stays at 0. | Holding the rate at the cap would leave a low-volume buyer blocked forever. |
 | Failed and timeout are separate outcomes | Failure rate is failed / total and excludes timeouts. Timeout rate is timeout / total. | Each outcome has its own threshold, and the two never overlap. |
 | Both thresholds crossed | The reason is `failure_rate`. Both flags are logged. | A fixed precedence keeps the reason deterministic. |
@@ -98,5 +98,7 @@ correct, so two evaluators racing on one window cannot both apply a step.
   lost if the pod crashes.
 - **Per-buyer store calls.** The evaluator makes three store round trips per buyer per
   window. This is fine for tens of buyers. At thousands, the reads should be pipelined.
+- **Clock skew.** Window indexes come from each pod's own clock, so pods are assumed to
+  agree within the grace period (NTP). Larger skew moves calls into a neighbouring window.
 - **No backfill.** A paused evaluator skips the windows it missed and evaluates only the
   latest closed one. Replaying old windows would step rates in bursts.
