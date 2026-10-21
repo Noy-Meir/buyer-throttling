@@ -1,0 +1,8 @@
+.git
+.idea
+.claude
+.mcp.json
+docs
+bin
+coverage.out
+*.test
