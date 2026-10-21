@@ -60,6 +60,7 @@ means the default.
 | `THROTTLE_MAX_STALENESS` | `5m` | Snapshot age after which a pod stops throttling (fails open). |
 | `THROTTLE_STATS_TTL` | `5m` | How long a window's stats are kept. Must exceed window plus grace. |
 | `THROTTLE_MAX_BUYERS` | `10000` | Cap on distinct buyers tracked per process. |
+| `THROTTLE_BUYER_STATE_TTL` | `1h` | How long a buyer's state, and the set of known buyers, persist after their last write. Must exceed window plus grace. |
 
 Ratios are written as decimals (`0.7`) and must have at most four decimal places.
 
