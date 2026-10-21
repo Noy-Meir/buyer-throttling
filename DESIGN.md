@@ -71,8 +71,13 @@ evaluators are covered by the store and runner tests.
 | Flush fails | Drop the batch; do not re-add it to the next flush. | Re-adding would move calls into a later window than the one they were made in. |
 | Evaluator silent, or Redis unreachable from a pod | Keep the snapshot until the heartbeat has been unchanged for `MaxStaleness`, then fail open. ShouldCall returns true. | Liveness comes from the evaluator's heartbeat, so an evaluator outage fails open even while Redis is up. An outage must not stop auctions, and Redis is never on the request path. |
 | No heartbeat counter yet (first start, or lost in a restore) | Age it from the pod's first refresh, or from the last change. Do not fail open at once. | A pod that starts before the evaluator should not open immediately, and a restored key should not flip a block to open at once. |
+| Threshold reached | A rate equal to its threshold is a violation (`>=`), computed in integers. | Matches "reaches its threshold"; integer math avoids float edge cases. |
+| Skipped calls | A call the throttle skips is neither made nor recorded. | Skips are not outcomes; counting them would invent failures or successes. |
+| Sample boundaries | 0 calls is insufficient and never blocks. Exactly 100 is valid; fewer than 100 is insufficient. | Matches the minimum sample; the 0 case guards an empty window. |
 | Unknown buyer | Call it. | A buyer with no state is not throttled. |
 | More buyers than `MaxBuyers` | Calls still happen, but per-buyer counters and metrics are dropped and counted. | Bounds memory and metric cardinality against unknown IDs. |
+
+The full decision log, with rejected alternatives, is in `docs/decisions.md`.
 
 ## Trade-offs and known limitations
 
