@@ -96,6 +96,8 @@ type Throttler struct {
 	// never removed, so a *counters a Record holds can never be orphaned.
 	counters sync.Map
 	tracked  atomic.Int64
+	// createMu serialises creation of new buyers. Existing buyers never take it.
+	createMu sync.Mutex
 
 	snap atomic.Pointer[snapshot]
 
@@ -211,22 +213,31 @@ func (t *Throttler) Stats() Stats {
 
 // countersFor returns the counters for buyerID, creating them if the buyer is
 // within MaxBuyers. It returns nil for a new buyer past the cap.
+//
+// Existing buyers take the lock-free load and never reach the mutex. Only the
+// creation of a new buyer locks, and it re-checks the map under the lock. The
+// lock is what keeps the cap exact: an earlier version reserved a slot with an
+// atomic add before creating the entry, and a racer for a buyer that was
+// already tracked could see the cap as full and be counted as untracked.
 func (t *Throttler) countersFor(buyerID string) *counters {
 	if v, ok := t.counters.Load(buyerID); ok {
 		return v.(*counters)
 	}
-	// Reserve a slot before creating the entry. Reserving first keeps concurrent
-	// first-time Records from overshooting the cap.
-	if t.tracked.Add(1) > int64(t.cfg.MaxBuyers) {
-		t.tracked.Add(-1)
+	t.createMu.Lock()
+	defer t.createMu.Unlock()
+	// A racer may have created this buyer while we waited for the lock.
+	if v, ok := t.counters.Load(buyerID); ok {
+		return v.(*counters)
+	}
+	// Only this path changes tracked, and it runs under createMu, so the check
+	// and the increment cannot interleave with another creation.
+	if t.tracked.Load() >= int64(t.cfg.MaxBuyers) {
 		return nil
 	}
-	v, loaded := t.counters.LoadOrStore(buyerID, &counters{})
-	if loaded {
-		// Another goroutine created the entry first, so this slot is not used.
-		t.tracked.Add(-1)
-	}
-	return v.(*counters)
+	c := &counters{}
+	t.counters.Store(buyerID, c)
+	t.tracked.Add(1)
+	return c
 }
 
 func (t *Throttler) stale(snap *snapshot) bool {

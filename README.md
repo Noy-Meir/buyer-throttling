@@ -1,5 +1,7 @@
 # Buyer Throttling
 
+[![ci](https://github.com/Noy-Meir/buyer-throttling/actions/workflows/ci.yml/badge.svg)](https://github.com/Noy-Meir/buyer-throttling/actions/workflows/ci.yml)
+
 A throttling service for external buyers in a real-time auction. Pods decide per request
 whether to call each buyer, based on that buyer's recent failure and timeout rates. The
 decisions are evaluated once per window and shared through Redis, so every pod converges
@@ -111,6 +113,8 @@ Other lines to look for:
 - `scenario event applied`: when the simulator changed a buyer.
 
 ## Tests
+
+CI runs lint and the full test suite with the race detector on every pull request and on pushes to `main`. A second job validates the compose file and builds the images, without starting them.
 
 ```
 make test    # go test -race ./...

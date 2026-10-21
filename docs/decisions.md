@@ -269,3 +269,14 @@ alternative was weighed at the time, the entry says so.
   - Record, eight cores: 11.4 ns/op before, 8.6 ns/op after.
   - Allocations stayed at 0 B/op and 0 allocs/op throughout.
   - An earlier single run appeared to show about 16% slower Record. Back-to-back runs on the same laptop vary by about ±10%, so that was noise.
+
+## Concurrency: cap bug found by the test audit
+
+- **The bug.** `countersFor` reserved a cap slot with an atomic add before creating the buyer's counters. Under concurrency, a racer for a buyer that was already tracked could see the reservation overshoot the cap. That racer was counted as untracked, so its call was dropped from the counters and the flush.
+- **How it was found.** The test audit ran a concurrency repro: 64 goroutines recording one new buyer with a cap of 2. Untracked counts for that buyer were 12, 13 and 2 in separate runs. The buyer was already tracked, so none should have been untracked.
+- **Reproduction before the fix.** With a start barrier, the repro (256 racers) failed in 35 of 50 runs under `-race`. A check that a free slot never reports untracked also failed once in those 50 runs.
+- **The fix.** The lock-free `sync.Map` load stays as the first check for existing buyers. Only creating a new buyer takes `createMu`. Under the lock it re-loads the map, so a racer that lost the creation race returns the entry the winner stored. Only then does it check the cap and store the entry.
+- **Why only the creation path locks.** Reads of existing buyers are the hot path (`Record` is about 40 ns on one core). A mutex there would add contention on every call. New buyers are rare, so the lock costs nothing in steady state.
+- **Why the cap is exact.** Only creation changes `tracked`, and creation runs under `createMu`. The check and the increment cannot interleave with another creation, so no reservation is needed.
+- **Cost.** Benchmarks before and after: `ShouldCall` unchanged within noise (about 117 ns single-core, 0 allocs). `Record` about 40 ns before and after (6 runs each, about 2% difference, within noise), 0 allocs.
+- **Same pattern in the auction service, fixed the same way.** `internal/auction` `countsFor` had the same reserve-then-create race. It affected only per-buyer metrics, not enforcement. The fix uses the same structure: lock-free load for existing buyers, creation under `createMu` with a re-check, then the cap check. The repro failed in 23 of 50 runs before the fix.

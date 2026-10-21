@@ -215,12 +215,16 @@ func TestBuyersBeyondCapAreUntrackedButStillCalled(t *testing.T) {
 	caller := &fakeCaller{results: map[string]throttler.Result{"a": throttler.ResultOK, "b": throttler.ResultOK}, prices: map[string]float64{"a": 1, "b": 2}}
 	svc := NewService(th, caller, time.Second, 1)
 
+	// a claims the only slot first. Invited buyers run concurrently, so the
+	// slot is taken in whatever order the goroutines run. Sending a alone
+	// first makes the test deterministic.
+	svc.Run(context.Background(), Request{AuctionID: "0", Invited: []string{"a"}})
 	resp := svc.Run(context.Background(), Request{AuctionID: "1", Invited: []string{"a", "b"}})
 
 	assert.Equal(t, 2, resp.Calls, "the cap limits metrics, not auctions")
 	assert.Equal(t, "b", resp.Winner.BuyerID, "b still bids and can win")
 	assert.Len(t, th.recorded["b"], 1, "the throttler still records b")
 	totals, untracked := svc.Totals()
-	assert.Equal(t, []BuyerTotals{{BuyerID: "a", Calls: 1, OK: 1}}, totals)
+	assert.Equal(t, []BuyerTotals{{BuyerID: "a", Calls: 2, OK: 2}}, totals)
 	assert.Equal(t, int64(1), untracked)
 }
