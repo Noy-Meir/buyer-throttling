@@ -66,6 +66,9 @@ type Decision struct {
 	State               State
 	FailureRateViolated bool
 	TimeoutRateViolated bool
+	// Effective is the stats the decision was based on: the window plus any
+	// carried windows. It is zero-carry when the window stands alone.
+	Effective WindowStats
 }
 
 // Evaluate computes the next state for a buyer from the stats of the last
@@ -78,7 +81,9 @@ func Evaluate(window WindowStats, prev State, p Params) Decision {
 	// A zero total is always insufficient, even if MinSample were misconfigured
 	// to 0, which also keeps the ratio arithmetic below safe.
 	if effective.Total == 0 || effective.Total < p.MinSample {
-		return insufficientSample(prev, effective, p)
+		d := insufficientSample(prev, effective, p)
+		d.Effective = effective
+		return d
 	}
 
 	failureViolated := reaches(effective.Failed, effective.Total, p.FailureThresholdBP)
@@ -86,6 +91,7 @@ func Evaluate(window WindowStats, prev State, p Params) Decision {
 	d := Decision{
 		FailureRateViolated: failureViolated,
 		TimeoutRateViolated: timeoutViolated,
+		Effective:           effective,
 	}
 
 	switch {
@@ -102,13 +108,9 @@ func Evaluate(window WindowStats, prev State, p Params) Decision {
 // insufficientSample handles a window whose effective total is below MinSample.
 // The rates are not meaningful yet, so this path never blocks a buyer.
 func insufficientSample(prev State, effective WindowStats, p Params) Decision {
-	// A buyer that is not throttled has nothing to hold, so nothing is carried.
-	if prev.ThrottleRateBP == 0 {
-		return Decision{State: State{}}
-	}
-
-	// Hold the current rate and keep collecting. A throttled buyer that stays
-	// quiet is not treated as healthy until the carry cap is reached.
+	// Keep collecting while under the carry cap. This applies at rate 0 too, so
+	// a low-volume buyer can build up a sample big enough to be judged. Its
+	// rate is held: 0 stays 0 and a throttled rate stays where it is.
 	if prev.CarriedWindows < p.CarryCapWindows {
 		return Decision{State: State{
 			ThrottleRateBP: prev.ThrottleRateBP,
@@ -118,8 +120,10 @@ func insufficientSample(prev State, effective WindowStats, p Params) Decision {
 		}}
 	}
 
-	// Carry cap reached: count the window as clean. The carried sample is
-	// discarded, and violations in it are not checked.
+	// Cap reached with the sample still insufficient. The carry is discarded
+	// without judging it, so a violation is never decided on fewer than
+	// MinSample calls. A throttled buyer steps down as a clean window. A buyer
+	// at rate 0 has nothing to step, so its rate stays 0.
 	return Decision{State: stepDown(prev.ThrottleRateBP, p)}
 }
 

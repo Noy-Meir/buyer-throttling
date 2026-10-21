@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // defaultParams are the assignment defaults in basis points.
@@ -79,9 +80,9 @@ func TestEvaluateScenarios(t *testing.T) {
 			steps: []step{{stats(100, 70, 30), blockedFailure}},
 		},
 		{
-			name:  "total 0 with no throttle does not block or divide by zero",
+			name:  "total 0 with no throttle does not block or divide by zero, and carries an empty window",
 			start: State{},
-			steps: []step{{stats(0, 0, 0), State{}}},
+			steps: []step{{stats(0, 0, 0), State{CarriedWindows: 1}}},
 		},
 		{
 			name:  "total 0 while throttled holds the rate and carries nothing new",
@@ -95,7 +96,7 @@ func TestEvaluateScenarios(t *testing.T) {
 		{
 			name:  "total 99 is insufficient and does not block",
 			start: State{},
-			steps: []step{{stats(99, 99, 0), State{}}},
+			steps: []step{{stats(99, 99, 0), State{CarriedStats: stats(99, 99, 0), CarriedWindows: 1}}},
 		},
 		{
 			name:  "total 100 is a valid sample and blocks",
@@ -140,9 +141,54 @@ func TestEvaluateScenarios(t *testing.T) {
 			steps: []step{{clean, State{}}, {clean, State{}}},
 		},
 		{
-			name:  "small window at rate 0 does not block and carries nothing",
+			name:  "small window at rate 0 carries instead of blocking",
 			start: State{},
-			steps: []step{{stats(50, 50, 0), State{}}},
+			steps: []step{{stats(50, 50, 0), State{CarriedStats: stats(50, 50, 0), CarriedWindows: 1}}},
+		},
+		{
+			name:  "low-volume buyer accumulates to 100 at rate 0 and is blocked on the total",
+			start: State{},
+			steps: []step{
+				{stats(40, 40, 0), State{CarriedStats: stats(40, 40, 0), CarriedWindows: 1}},
+				{stats(40, 40, 0), State{CarriedStats: stats(80, 80, 0), CarriedWindows: 2}},
+				// 80 + 20 = 100 failed of 100: the accumulated sample is judged and blocks.
+				{stats(20, 20, 0), blockedFailure},
+			},
+		},
+		{
+			name:  "cap reached at rate 0 clears the carry without a block",
+			start: State{},
+			steps: []step{
+				{stats(10, 0, 0), State{CarriedStats: stats(10, 0, 0), CarriedWindows: 1}},
+				{stats(10, 0, 0), State{CarriedStats: stats(20, 0, 0), CarriedWindows: 2}},
+				{stats(10, 0, 0), State{CarriedStats: stats(30, 0, 0), CarriedWindows: 3}},
+				{stats(10, 0, 0), State{CarriedStats: stats(40, 0, 0), CarriedWindows: 4}},
+				{stats(10, 0, 0), State{CarriedStats: stats(50, 0, 0), CarriedWindows: 5}},
+				// Sixth insufficient window at rate 0: cap reached, carry dropped, no change.
+				{stats(10, 0, 0), State{}},
+			},
+		},
+		{
+			name:  "cap reached at rate 0 drops a violating sample without judging it",
+			start: State{},
+			steps: []step{
+				{stats(10, 10, 0), State{CarriedStats: stats(10, 10, 0), CarriedWindows: 1}},
+				{stats(10, 10, 0), State{CarriedStats: stats(20, 20, 0), CarriedWindows: 2}},
+				{stats(10, 10, 0), State{CarriedStats: stats(30, 30, 0), CarriedWindows: 3}},
+				{stats(10, 10, 0), State{CarriedStats: stats(40, 40, 0), CarriedWindows: 4}},
+				{stats(10, 10, 0), State{CarriedStats: stats(50, 50, 0), CarriedWindows: 5}},
+				{stats(10, 10, 0), State{}},
+			},
+		},
+		{
+			name:  "carry is cleared after an evaluated window and does not leak into the next",
+			start: State{},
+			steps: []step{
+				{stats(50, 0, 0), State{CarriedStats: stats(50, 0, 0), CarriedWindows: 1}},
+				// 50 + 50 = 100: evaluated and clean. Nothing stays carried.
+				{stats(50, 0, 0), State{}},
+				{stats(30, 0, 0), State{CarriedStats: stats(30, 0, 0), CarriedWindows: 1}},
+			},
 		},
 		{
 			name:  "floor at 0: a step larger than the remaining rate lands on 0",
@@ -249,6 +295,27 @@ func TestEvaluateScenarios(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A violation is never judged on fewer than MinSample calls, at any rate.
+func TestNoViolationJudgedOnInsufficientSample(t *testing.T) {
+	for _, start := range []State{{}, {ThrottleRateBP: 5000, Reason: ReasonRecovering}} {
+		state := start
+		for i := 0; i < 5; i++ {
+			d := Evaluate(stats(10, 10, 0), state, defaultParams) // 100% failed, 10 calls
+			require.False(t, d.FailureRateViolated, "window %d, start rate %d", i, start.ThrottleRateBP)
+			require.False(t, d.TimeoutRateViolated)
+			state = d.State
+		}
+	}
+}
+
+// Effective is the window plus carried stats, so a held window's log line can be read.
+func TestDecisionEffectiveIncludesCarry(t *testing.T) {
+	first := Evaluate(stats(40, 4, 0), State{}, defaultParams)
+	second := Evaluate(stats(40, 4, 0), first.State, defaultParams)
+	assert.Equal(t, stats(40, 4, 0), first.Effective)
+	assert.Equal(t, stats(80, 8, 0), second.Effective)
 }
 
 func TestEvaluateViolationFlags(t *testing.T) {
