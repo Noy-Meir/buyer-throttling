@@ -35,6 +35,7 @@ type fakeEval struct {
 }
 
 func (f *fakeEval) Snapshot() ([]runner.Observation, int64) { return f.obs, f.untracked }
+func (f *fakeEval) HeartbeatFailures() int64                { return 3 }
 
 // gather runs the collectors through a fresh registry, like a scrape would.
 func gather(t *testing.T, cs ...prometheus.Collector) map[string]*dto.MetricFamily {
@@ -144,4 +145,5 @@ func TestEvaluatorCollectorReportsLastDecision(t *testing.T) {
 	assert.Equal(t, 3.0, value(t, fams, "throttle_evaluator_violations_total", "quiet"))
 	assert.Equal(t, 4.0, value(t, fams, "throttle_evaluator_carried_windows_total", "quiet"))
 	assert.Equal(t, 2.0, value(t, fams, "throttle_evaluator_unobserved_evaluations_total", ""))
+	assert.Equal(t, 3.0, value(t, fams, "throttle_evaluator_heartbeat_failures_total", ""))
 }

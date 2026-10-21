@@ -9,6 +9,7 @@ import (
 // EvaluatorSource is what the evaluator collector reads.
 type EvaluatorSource interface {
 	Snapshot() ([]runner.Observation, int64)
+	HeartbeatFailures() int64
 }
 
 // EvaluatorCollector reports what the evaluator last decided for each buyer.
@@ -18,26 +19,28 @@ type EvaluatorCollector struct {
 	rate, failureRate, timeoutRate   *prometheus.Desc
 	evaluations, violations, carried *prometheus.Desc
 	unobserved                       *prometheus.Desc
+	heartbeatFailures                *prometheus.Desc
 }
 
 // NewEvaluatorCollector returns a collector for src.
 func NewEvaluatorCollector(src EvaluatorSource) *EvaluatorCollector {
 	buyer := []string{"buyer_id"}
 	return &EvaluatorCollector{
-		src:         src,
-		rate:        prometheus.NewDesc("throttle_evaluator_throttle_rate", "Throttle rate after the last evaluation, 0 to 1.", buyer, nil),
-		failureRate: prometheus.NewDesc("throttle_evaluator_failure_rate", "Failure rate of the last evaluated window, carry-inclusive.", buyer, nil),
-		timeoutRate: prometheus.NewDesc("throttle_evaluator_timeout_rate", "Timeout rate of the last evaluated window, carry-inclusive.", buyer, nil),
-		evaluations: prometheus.NewDesc("throttle_evaluator_evaluations_total", "Windows evaluated for this buyer.", buyer, nil),
-		violations:  prometheus.NewDesc("throttle_evaluator_violations_total", "Evaluations where a rate reached its threshold.", buyer, nil),
-		carried:     prometheus.NewDesc("throttle_evaluator_carried_windows_total", "Evaluations that held a window below the minimum sample.", buyer, nil),
-		unobserved:  prometheus.NewDesc("throttle_evaluator_unobserved_evaluations_total", "Evaluations for buyers beyond MaxBuyers, not broken out per buyer.", nil, nil),
+		src:               src,
+		rate:              prometheus.NewDesc("throttle_evaluator_throttle_rate", "Throttle rate after the last evaluation, 0 to 1.", buyer, nil),
+		failureRate:       prometheus.NewDesc("throttle_evaluator_failure_rate", "Failure rate of the last evaluated window, carry-inclusive.", buyer, nil),
+		timeoutRate:       prometheus.NewDesc("throttle_evaluator_timeout_rate", "Timeout rate of the last evaluated window, carry-inclusive.", buyer, nil),
+		evaluations:       prometheus.NewDesc("throttle_evaluator_evaluations_total", "Windows evaluated for this buyer.", buyer, nil),
+		violations:        prometheus.NewDesc("throttle_evaluator_violations_total", "Evaluations where a rate reached its threshold.", buyer, nil),
+		carried:           prometheus.NewDesc("throttle_evaluator_carried_windows_total", "Evaluations that held a window below the minimum sample.", buyer, nil),
+		unobserved:        prometheus.NewDesc("throttle_evaluator_unobserved_evaluations_total", "Evaluations for buyers beyond MaxBuyers, not broken out per buyer.", nil, nil),
+		heartbeatFailures: prometheus.NewDesc("throttle_evaluator_heartbeat_failures_total", "Heartbeat writes that Redis rejected. Pods fail open if beats stop arriving.", nil, nil),
 	}
 }
 
 // Describe sends every descriptor.
 func (c *EvaluatorCollector) Describe(ch chan<- *prometheus.Desc) {
-	for _, d := range []*prometheus.Desc{c.rate, c.failureRate, c.timeoutRate, c.evaluations, c.violations, c.carried, c.unobserved} {
+	for _, d := range []*prometheus.Desc{c.rate, c.failureRate, c.timeoutRate, c.evaluations, c.violations, c.carried, c.unobserved, c.heartbeatFailures} {
 		ch <- d
 	}
 }
@@ -54,4 +57,5 @@ func (c *EvaluatorCollector) Collect(ch chan<- prometheus.Metric) {
 		ch <- prometheus.MustNewConstMetric(c.carried, prometheus.CounterValue, float64(o.CarriedWindows), o.BuyerID)
 	}
 	ch <- prometheus.MustNewConstMetric(c.unobserved, prometheus.CounterValue, float64(unobserved))
+	ch <- prometheus.MustNewConstMetric(c.heartbeatFailures, prometheus.CounterValue, float64(c.src.HeartbeatFailures()))
 }
