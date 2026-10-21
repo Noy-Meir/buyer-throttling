@@ -134,6 +134,13 @@ func Load(lookup func(key string) (string, bool)) (Config, error) {
 		l.errs = append(l.errs, fmt.Errorf("%s: must be greater than %s + %s (the evaluation window and grace)",
 			EnvBuyerStateTTL, EnvEvaluationWindow, EnvGrace))
 	}
+	// The evaluator beats once per window, after the grace period. A pod must
+	// not fail open between two beats, so MaxStaleness must cover the window,
+	// the grace period and one refresh of the counter.
+	if len(l.errs) == 0 && cfg.MaxStaleness <= cfg.EvaluationWindow+cfg.Grace+cfg.StateRefreshInterval {
+		l.errs = append(l.errs, fmt.Errorf("%s: must be greater than %s + %s + %s (one evaluation tick plus one refresh)",
+			EnvMaxStaleness, EnvEvaluationWindow, EnvGrace, EnvStateRefreshInterval))
+	}
 	if len(l.errs) == 0 && cfg.RecoveryStepBP > cfg.BlockLevelBP {
 		l.errs = append(l.errs, fmt.Errorf("%s: must be less than or equal to %s (%.4f)",
 			EnvRecoveryStep, EnvBlockLevel, float64(cfg.BlockLevelBP)/basisPoints))

@@ -149,6 +149,7 @@ func TestLoadValidation(t *testing.T) {
 		{"state refresh must be a duration", EnvStateRefreshInterval, "2", "positive duration"},
 		{"negative grace is rejected", EnvGrace, "-1s", "non-negative duration"},
 		{"max staleness of 0 is rejected", EnvMaxStaleness, "0", "positive duration"},
+		{"max staleness not longer than window plus grace plus refresh is rejected", EnvMaxStaleness, "17s", "must be greater than THROTTLE_EVALUATION_WINDOW + THROTTLE_GRACE + THROTTLE_STATE_REFRESH_INTERVAL"},
 		{"stats TTL of 0 is rejected", EnvStatsTTL, "0s", "positive duration"},
 		{"stats TTL not longer than window plus grace is rejected", EnvStatsTTL, "1m", "must be greater than THROTTLE_EVALUATION_WINDOW + THROTTLE_GRACE"},
 		{"max buyers of 0 is rejected", EnvMaxBuyers, "0", "greater than 0"},
