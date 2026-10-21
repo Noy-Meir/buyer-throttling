@@ -12,13 +12,14 @@ Pods count calls in local atomic counters and every second write them with `HINC
 `stats:{buyer}:{window}`, so pods add to one window without coordinating. After each window
 closes plus a 5-second grace period, the evaluator evaluates the latest closed window for
 each buyer and writes `state:{buyer}` with a compare-and-set. Pods reload throttled buyers
-every two seconds.
+every two seconds. After each tick the evaluator also increments a heartbeat counter, which
+the pods watch for liveness.
 
 ## Keeping the per-request check fast
 
 `ShouldCall` reads an immutable snapshot through an atomic pointer. At rate 0 it returns
 true without a random draw; otherwise it skips when a draw in `[0, 10000)` falls below the
-rate in basis points, and it checks snapshot age against the clock. `Record` adds to an
+rate in basis points, and it checks how long the evaluator's heartbeat has been unchanged. `Record` adds to an
 atomic counter found in a `sync.Map`. Neither call touches the network. `Record` takes no lock
 for an existing buyer. The creation path takes a lock only when a new buyer is admitted under
 the cap; a new buyer past the cap is rejected without the lock.
@@ -34,10 +35,11 @@ Benchmarks (i5-1038NG7, `go test -bench`, mean of three to six runs, 0 allocatio
 We did not run a 100k requests/s load test. Our evidence is the per-call benchmarks above
 and the absence of network calls and locks on the request path.
 
-The staleness check stays in `ShouldCall`. In the refresher, a hung or dead goroutine would
-never flip the flag, and a pod could enforce an old block forever. The check at call time
-avoids that; its cost is small against the 150 ms budget, and we did not measure the clock
-read alone.
+Staleness is measured on evaluator liveness, not on refresh age. The evaluator increments a
+heartbeat counter at the end of every tick, and each pod records the time on its own clock when
+the counter changes. The pod fails open once the counter has been unchanged for `MaxStaleness`.
+A hung refresher no longer matters: it only stops recording changes, so the last change ages and
+the pod fails open too. Each pod compares its own clock with itself, so host skew does not matter.
 
 ## How multiple pods stay consistent
 
@@ -67,7 +69,8 @@ evaluators are covered by the store and runner tests.
 | Failed and timeout are separate outcomes | Failure rate is failed / total and excludes timeouts. Timeout rate is timeout / total. | Each outcome has its own threshold, and the two never overlap. |
 | Both thresholds crossed | The reason is `failure_rate`. Both flags are logged. | A fixed precedence keeps the reason deterministic. |
 | Flush fails | Drop the batch; do not re-add it to the next flush. | Re-adding would move calls into a later window than the one they were made in. |
-| Redis unreachable from a pod | Keep the snapshot for up to 5 minutes, then fail open. ShouldCall returns true. | An outage in the store must not stop auctions. Redis is never on the request path. |
+| Evaluator silent, or Redis unreachable from a pod | Keep the snapshot until the heartbeat has been unchanged for `MaxStaleness`, then fail open. ShouldCall returns true. | Liveness comes from the evaluator's heartbeat, so an evaluator outage fails open even while Redis is up. An outage must not stop auctions, and Redis is never on the request path. |
+| No heartbeat counter yet (first start, or lost in a restore) | Age it from the pod's first refresh, or from the last change. Do not fail open at once. | A pod that starts before the evaluator should not open immediately, and a restored key should not flip a block to open at once. |
 | Unknown buyer | Call it. | A buyer with no state is not throttled. |
 | More buyers than `MaxBuyers` | Calls still happen, but per-buyer counters and metrics are dropped and counted. | Bounds memory and metric cardinality against unknown IDs. |
 

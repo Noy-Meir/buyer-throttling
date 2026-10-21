@@ -120,7 +120,7 @@ alternative was weighed at the time, the entry says so.
   - Reasoning: a broken Redis must not block auctions. A buyer that is not known as throttled is treated as healthy.
   - Rejected: fail-closed, which would stop all calls to every buyer on a Redis outage.
 
-- **Staleness measured from the last successful refresh, using the injected clock.**
+- **Staleness measured from the last successful refresh, using the injected clock. (Superseded: see "Liveness: evaluator heartbeat" below.)**
   - Rejected: staleness from the state's window. The window does not say when the pod last heard from Redis.
 
 - **Staleness check kept inside ShouldCall (rejected: moving it to the refresher).**
@@ -280,3 +280,18 @@ alternative was weighed at the time, the entry says so.
 - **Why the cap is exact.** Only creation changes `tracked`, and creation runs under `createMu`. The check and the increment cannot interleave with another creation, so no reservation is needed.
 - **Cost.** Benchmarks before and after: `ShouldCall` unchanged within noise (about 117 ns single-core, 0 allocs). `Record` about 40 ns before and after (6 runs each, about 2% difference, within noise), 0 allocs.
 - **Same pattern in the auction service, fixed the same way.** `internal/auction` `countsFor` had the same reserve-then-create race. It affected only per-buyer metrics, not enforcement. The fix uses the same structure: lock-free load for existing buyers, creation under `createMu` with a re-check, then the cap check. The repro failed in 23 of 50 runs before the fix.
+
+## Liveness: evaluator heartbeat (replaces refresh-age staleness)
+
+- **The problem.** Staleness was measured from the pod's last successful refresh. Refresh keeps succeeding while Redis is up, even if the evaluator is dead, so a recovered buyer stayed blocked indefinitely. CLAUDE.md asks for fail-open when state is too old.
+- **Decision.** The evaluator increments a global counter (`evaluator:heartbeat`) at the end of every completed tick, including ticks that skip already-evaluated windows. Each pod reads the counter on each refresh. When the value changes, the pod records the time on its own clock. The pod fails open once the time of the last change is older than `MaxStaleness`.
+- **Why the pod's own clock.** Comparing a timestamp written by the evaluator with the pod's clock would make host skew part of the liveness check. Recording the change on the pod's clock and comparing it with the pod's clock avoids that.
+- **Why a counter, not a timestamp.** The evaluator's clock is never compared with a pod's clock, and a counter cannot be made to look fresh by a skewed writer.
+- **Quiet buyer is not stale.** The counter moves every tick, whatever any buyer's state, so a buyer held in carry does not look stale while the evaluator runs.
+- **Missing counter.** A missing counter counts as not changing. On first start the clock begins at the first refresh, so a pod does not fail open at once. A counter lost in a restore ages from the last change.
+- **Restored, lower counter.** Any change counts as liveness, so an older, lower value resets the clock.
+- **Beat failures.** A failed beat is logged and counted (`throttle_evaluator_heartbeat_failures_total`) and does not stop the loop. A failed read in a pod counts as a refresh failure and does not update the change time.
+- **Rule for validation.** `MaxStaleness` must exceed window plus grace plus refresh, since a pod must not fail open between two beats.
+- **Rejected: refresh age (the old rule).** Blind to an evaluator outage while Redis is up.
+- **Rejected: a timestamp written by the evaluator.** Depends on cross-host clock agreement.
+- **Hot-path cost.** One atomic load and one clock read, the same as before. See the benchmarks in DESIGN.md.
