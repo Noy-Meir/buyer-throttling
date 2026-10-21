@@ -67,3 +67,9 @@ Validation: 0 < block < 1, step > 0, recovery step <= block level, thresholds in
 
 ## Deliverables checklist
 DESIGN.md (~1 page: components, data flow, fast critical path, multi-pod consistency, trade-offs, documented ambiguity decisions), code, evaluator tests, Redis store, docker compose with Redis + evaluator + at least 2 pods + simulator (watch a bad buyer get blocked then recover in logs), README (run, configure, observe).
+## Demo expectations (docker compose, watch the evaluator logs)
+- Scenario: at 30s buyer_bad and buyer_quiet both go to failure_rate 0.8; at 150s both heal to 0.
+- buyer_bad: ~1000 calls per window at full participation, so it is judged every window. Expect a WARN with throttle_rate_bp=9500, reason=failure_rate, within about one window of the break.
+- buyer_quiet (5% participation): ~50 calls per 10s window, below min sample 100. At rate 0 the window is carried at debug level, so no line appears for the first window. Expect the first WARN with throttle_rate_bp=9500, reason=failure_rate, effective_total around 100 (carry-inclusive), roughly two windows (about 20-30s) after the break.
+- After that buyer_quiet's traffic drops to roughly 2-3 calls per window, so it reaches the carry cap and steps down by one recovery step per about six windows, even at 0.8 failure. This is the accepted low-volume oscillation (see docs/decisions.md). It will eventually snap back to 9500 when the carried sample reaches 100 again.
+- Carries while throttled are INFO (carried_windows=N); carries at rate 0 are DEBUG.
