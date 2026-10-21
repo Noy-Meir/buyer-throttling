@@ -123,6 +123,7 @@ func TestLoadValidation(t *testing.T) {
 		{"block level that rounds to 1 is rejected", EnvBlockLevel, "0.99999", "at most 4 decimal places"},
 		{"negative block level is rejected", EnvBlockLevel, "-0.5", "less than 1"},
 		{"recovery step of 0 is rejected", EnvRecoveryStep, "0", "must be greater than 0"},
+		{"recovery step above block level is rejected", EnvRecoveryStep, "0.96", "less than or equal to THROTTLE_BLOCK_LEVEL"},
 		{"recovery step below one basis point is rejected", EnvRecoveryStep, "0.00001", "at most 4 decimal places"},
 		{"failure threshold of 0 is rejected", EnvFailureThreshold, "0", "must be greater than 0 and at most 1"},
 		{"failure threshold above 1 is rejected", EnvFailureThreshold, "1.01", "at most 1"},
@@ -162,6 +163,12 @@ func TestLoadReportsAllProblemsAtOnce(t *testing.T) {
 	assert.ErrorContains(t, err, EnvBlockLevel)
 	assert.ErrorContains(t, err, EnvRecoveryStep)
 	assert.ErrorContains(t, err, EnvMinSample)
+}
+
+func TestLoadAcceptsRecoveryStepEqualToBlockLevel(t *testing.T) {
+	cfg, err := Load(env(map[string]string{EnvRecoveryStep: "0.95"}))
+	require.NoError(t, err)
+	assert.Equal(t, cfg.BlockLevelBP, cfg.RecoveryStepBP)
 }
 
 func TestEvaluatorParamsMapsFields(t *testing.T) {

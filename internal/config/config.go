@@ -105,6 +105,13 @@ func Load(lookup func(key string) (string, bool)) (Config, error) {
 	setDuration(l, EnvStateRefreshInterval, &cfg.StateRefreshInterval, positive[time.Duration], "must be a positive duration, e.g. 2s")
 	setDuration(l, EnvMaxStaleness, &cfg.MaxStaleness, positive[time.Duration], "must be a positive duration, e.g. 5m")
 
+	// A step larger than the block level would let one clean window jump
+	// straight from block to 0, which is a cliff rather than a recovery.
+	if len(l.errs) == 0 && cfg.RecoveryStepBP > cfg.BlockLevelBP {
+		l.errs = append(l.errs, fmt.Errorf("%s: must be less than or equal to %s (%.4f)",
+			EnvRecoveryStep, EnvBlockLevel, float64(cfg.BlockLevelBP)/basisPoints))
+	}
+
 	if len(l.errs) > 0 {
 		return Config{}, errors.Join(l.errs...)
 	}
