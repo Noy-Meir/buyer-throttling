@@ -221,3 +221,51 @@ alternative was weighed at the time, the entry says so.
 
 - **`make up` runs compose in the foreground.**
   - Reasoning: the demo is watched in logs. `make logs` tails the services.
+
+## Observability: /state and /metrics
+
+- **/state is served in two places.**
+  - The evaluator reads the store (AllStates). That is the source of truth.
+  - Each pod reads its local snapshot plus the buyers it has seen. That is what it actually enforces.
+  - Reasoning: the two answers can differ for up to one refresh interval (2s) plus the time to the next evaluation. Showing both makes that visible: a pod that disagrees with the store is either behind on refresh or has a stale snapshot.
+  - Rejected: serving only the evaluator's view. Then nothing shows what a pod is enforcing right now.
+  - Rejected: making the pod's /state call Redis. The handler would depend on the store, so it would fail during an outage. It would also be slower, which matters for an endpoint scraped while auctions run.
+  - Verified: a test checks that the pod handler makes no store call, even with the store failing every request.
+
+- **Pods expose the buyers they have seen, not all buyers.**
+  - Reasoning: a pod's view covers what it enforces and what it has observed. Including every buyer in Redis would mean the pod has to read the store.
+  - Rule: a buyer with no snapshot entry shows rate 0 and an empty reason.
+
+- **/state format and sorting.**
+  - Format is exactly `{"buyers":[{"buyer_id","throttle_rate","reason"}]}`. throttle_rate is basis points / 10000. An empty list is `[]`, not `null`. Buyers are sorted by ID.
+  - A store error on the evaluator returns 503 with a generic message. The detail is logged, not returned.
+
+- **Custom Prometheus collectors instead of labelled Inc on the request path.**
+  - Reasoning: ShouldCall and Record are the hot path. A labelled Counter.Inc costs a map lookup per call, and allocates unless the label set is pre-resolved. The pods already keep atomic counters, so a collector reads them at scrape time and the request path does not change.
+  - Rejected: labelled counters updated in Record or ShouldCall. Measurably slower and allocating on the path the assignment says must add as little latency as possible.
+  - Consequence: the per-buyer call counts come from the auction service, which keeps cumulative totals. The log summary now reports deltas between its calls, so its lines are unchanged.
+
+- **Metric label cardinality is bounded by MaxBuyers.**
+  - The pod's throttler, the pod's auction service and the evaluator's observations each cap per-buyer series at MaxBuyers. Beyond the cap, the calls still happen. Only the per-buyer breakdown is dropped, and the drop is counted in an unlabelled counter.
+  - Reasoning: an unknown buyer ID must not create a series. Each cap is a separate map with its own count.
+  - Rejected: unbounded per-buyer labels. A misbehaving caller could exhaust memory in Prometheus and in the process.
+
+- **Evaluator metrics describe the last applied decision.**
+  - Gauges for rate and last window's effective failure and timeout rates. Counters for evaluations, violations and carried windows.
+  - Violations count any rate reaching its threshold.
+  - Reasoning: these are what an operator needs to see why a buyer is blocked. Gauges report the last window's state, and counters report how often each event happened.
+
+- **Pod snapshot age is omitted before the first refresh.**
+  - Reasoning: no snapshot means no age. Reporting zero would look like a fresh snapshot.
+
+- **Server timeouts.**
+  - Read header 5s, read 10s, write 10s, idle 60s, applied to the shared server in `internal/app`.
+  - Reasoning: a stalled client should not hold a connection indefinitely.
+
+- **Benchmark before and after (same machine, back to back, count 3).**
+  - ShouldCall, one core: 117.4 ns/op before, 116.8 ns/op after.
+  - Record, one core: 40.8 ns/op before, 36.6 ns/op after.
+  - ShouldCall, eight cores: 29.1 ns/op before, 21.1 ns/op after.
+  - Record, eight cores: 11.4 ns/op before, 8.6 ns/op after.
+  - Allocations stayed at 0 B/op and 0 allocs/op throughout.
+  - An earlier single run appeared to show about 16% slower Record. Back-to-back runs on the same laptop vary by about ±10%, so that was noise.
