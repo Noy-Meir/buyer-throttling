@@ -7,7 +7,8 @@
 #   simulator sends 100 auctions/s, split across two pods
 #   buyer_good and buyer_bad are invited to every auction: ~1000 calls per window
 #   buyer_quiet is invited to 5% of auctions: ~50 calls per window, below the
-#   minimum sample, so it exercises carry-over (evaluated every second window)
+#   minimum sample. Small windows are carried until they reach 100 calls, so
+#   a failing buyer_quiet is judged about every second window
 
 x-throttle-env: &throttle-env
   THROTTLE_EVALUATION_WINDOW: "10s"

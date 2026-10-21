@@ -1,9 +1,11 @@
 # One Dockerfile builds every binary under cmd/. Pick one with --build-arg CMD=<name>,
 # e.g. evaluator, pod, buyers, simulator.
 
-ARG GO_VERSION=1.27
+# Must match the go directive in go.mod. Alpine, so the build and the final
+# image share a base and the binary is built with CGO disabled.
+ARG GO_VERSION=1.27.3
 
-FROM golang:${GO_VERSION} AS build
+FROM golang:${GO_VERSION}-alpine AS build
 ARG CMD
 WORKDIR /src
 # Dependencies first, so source edits do not invalidate the module cache layer.
