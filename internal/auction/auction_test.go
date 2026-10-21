@@ -61,7 +61,7 @@ func TestRunSkippedBuyersAreNotCalledOrRecorded(t *testing.T) {
 		results: map[string]throttler.Result{"ok": throttler.ResultOK, "skipme": throttler.ResultOK},
 		prices:  map[string]float64{"ok": 2, "skipme": 99},
 	}
-	svc := NewService(th, caller, time.Second)
+	svc := NewService(th, caller, time.Second, 1000)
 
 	resp := svc.Run(context.Background(), Request{AuctionID: "a1", Invited: []string{"ok", "skipme"}})
 
@@ -83,7 +83,7 @@ func TestRunRecordsEachOutcomeOnce(t *testing.T) {
 		prices: map[string]float64{"good": 3},
 		hang:   map[string]bool{"slow": true},
 	}
-	svc := NewService(th, caller, 20*time.Millisecond)
+	svc := NewService(th, caller, 20*time.Millisecond, 1000)
 
 	resp := svc.Run(context.Background(), Request{AuctionID: "a", Invited: []string{"good", "broken", "slow"}})
 
@@ -130,7 +130,7 @@ func TestWinnerIsHighestSuccessfulBid(t *testing.T) {
 			for id := range tc.results {
 				ids = append(ids, id)
 			}
-			svc := NewService(newFakeThrottler(), &fakeCaller{results: tc.results, prices: tc.prices}, time.Second)
+			svc := NewService(newFakeThrottler(), &fakeCaller{results: tc.results, prices: tc.prices}, time.Second, 1000)
 			resp := svc.Run(context.Background(), Request{AuctionID: "a", Invited: ids})
 			require.NotNil(t, resp.Winner)
 			assert.Equal(t, tc.wantWinner, resp.Winner.BuyerID)
@@ -141,14 +141,14 @@ func TestWinnerIsHighestSuccessfulBid(t *testing.T) {
 
 func TestNoSuccessfulBidMeansNoWinner(t *testing.T) {
 	caller := &fakeCaller{results: map[string]throttler.Result{"a": throttler.ResultFailed}}
-	svc := NewService(newFakeThrottler(), caller, time.Second)
+	svc := NewService(newFakeThrottler(), caller, time.Second, 1000)
 	resp := svc.Run(context.Background(), Request{AuctionID: "a", Invited: []string{"a"}})
 	assert.Nil(t, resp.Winner)
 	assert.Equal(t, 0, resp.Bids)
 }
 
 func TestNoInvitedBuyers(t *testing.T) {
-	svc := NewService(newFakeThrottler(), &fakeCaller{}, time.Second)
+	svc := NewService(newFakeThrottler(), &fakeCaller{}, time.Second, 1000)
 	resp := svc.Run(context.Background(), Request{AuctionID: "a"})
 	assert.Equal(t, Response{AuctionID: "a"}, resp)
 }
@@ -159,7 +159,7 @@ func TestSummaryReportsAndResets(t *testing.T) {
 		results: map[string]throttler.Result{"b1": throttler.ResultOK, "b2": throttler.ResultFailed},
 		prices:  map[string]float64{"b1": 1},
 	}
-	svc := NewService(th, caller, time.Second)
+	svc := NewService(th, caller, time.Second, 1000)
 	svc.Run(context.Background(), Request{AuctionID: "1", Invited: []string{"b1", "b2", "skipped"}})
 	svc.Run(context.Background(), Request{AuctionID: "2", Invited: []string{"b1"}})
 
@@ -178,7 +178,7 @@ func TestConcurrentRunsAreSafe(t *testing.T) {
 		results: map[string]throttler.Result{"a": throttler.ResultOK, "b": throttler.ResultFailed},
 		prices:  map[string]float64{"a": 2},
 	}
-	svc := NewService(newFakeThrottler("c"), caller, time.Second)
+	svc := NewService(newFakeThrottler("c"), caller, time.Second, 1000)
 	var wg sync.WaitGroup
 	for i := 0; i < 50; i++ {
 		wg.Add(1)
@@ -193,4 +193,34 @@ func TestConcurrentRunsAreSafe(t *testing.T) {
 		total += s.Calls + s.Skipped
 	}
 	assert.Equal(t, int64(150), total)
+}
+
+func TestTotalsAreCumulativeAndSurviveSummary(t *testing.T) {
+	caller := &fakeCaller{results: map[string]throttler.Result{"a": throttler.ResultOK}, prices: map[string]float64{"a": 1}}
+	svc := NewService(newFakeThrottler("s"), caller, time.Second, 1000)
+	svc.Run(context.Background(), Request{AuctionID: "1", Invited: []string{"a", "s"}})
+	svc.Summary()
+	svc.Run(context.Background(), Request{AuctionID: "2", Invited: []string{"a"}})
+
+	totals, untracked := svc.Totals()
+	assert.Equal(t, 0, int(untracked))
+	assert.Equal(t, []BuyerTotals{
+		{BuyerID: "a", Calls: 2, OK: 2},
+		{BuyerID: "s", Skipped: 1},
+	}, totals, "a summary does not reset the cumulative totals")
+}
+
+func TestBuyersBeyondCapAreUntrackedButStillCalled(t *testing.T) {
+	th := newFakeThrottler()
+	caller := &fakeCaller{results: map[string]throttler.Result{"a": throttler.ResultOK, "b": throttler.ResultOK}, prices: map[string]float64{"a": 1, "b": 2}}
+	svc := NewService(th, caller, time.Second, 1)
+
+	resp := svc.Run(context.Background(), Request{AuctionID: "1", Invited: []string{"a", "b"}})
+
+	assert.Equal(t, 2, resp.Calls, "the cap limits metrics, not auctions")
+	assert.Equal(t, "b", resp.Winner.BuyerID, "b still bids and can win")
+	assert.Len(t, th.recorded["b"], 1, "the throttler still records b")
+	totals, untracked := svc.Totals()
+	assert.Equal(t, []BuyerTotals{{BuyerID: "a", Calls: 1, OK: 1}}, totals)
+	assert.Equal(t, int64(1), untracked)
 }

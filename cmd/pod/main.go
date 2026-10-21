@@ -61,7 +61,7 @@ func run(logger *slog.Logger) error {
 		IdleConnTimeout:     90 * time.Second,
 	}
 	caller := auction.NewHTTPCaller(buyersURL, &http.Client{Transport: transport})
-	svc := auction.NewService(th, caller, callTimeout)
+	svc := auction.NewService(th, caller, callTimeout, cfg.MaxBuyers)
 
 	go summaryLoop(ctx, svc, th, logger, summaryEvery)
 

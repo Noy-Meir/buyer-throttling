@@ -53,7 +53,19 @@ type Service struct {
 	throttler Throttler
 	caller    Caller
 	timeout   time.Duration
-	counts    sync.Map // buyerID -> *buyerCounts, read by the periodic summary
+
+	// counts holds cumulative per-buyer totals, read at scrape time by the
+	// metrics collector. Only the first maxBuyers buyers seen are tracked, so
+	// label cardinality stays bounded. Calls for other buyers still happen.
+	maxBuyers int
+	tracked   atomic.Int64
+	untracked atomic.Int64
+	counts    sync.Map // buyerID -> *buyerCounts
+
+	// summaryMu guards last, the totals at the previous log summary. Summary is
+	// not on the request path.
+	summaryMu sync.Mutex
+	last      map[string]BuyerTotals
 }
 
 type buyerCounts struct {
@@ -63,9 +75,16 @@ type buyerCounts struct {
 	timeout atomic.Int64
 }
 
-// NewService returns a Service. timeout is the per-call deadline.
-func NewService(th Throttler, caller Caller, timeout time.Duration) *Service {
-	return &Service{throttler: th, caller: caller, timeout: timeout}
+// NewService returns a Service. timeout is the per-call deadline and maxBuyers
+// caps how many distinct buyers get their own counters.
+func NewService(th Throttler, caller Caller, timeout time.Duration, maxBuyers int) *Service {
+	return &Service{
+		throttler: th,
+		caller:    caller,
+		timeout:   timeout,
+		maxBuyers: maxBuyers,
+		last:      map[string]BuyerTotals{},
+	}
 }
 
 // outcome is one invited buyer's result, written by its goroutine into a slot
@@ -83,7 +102,9 @@ func (s *Service) Run(ctx context.Context, req Request) Response {
 	var wg sync.WaitGroup
 	for i, buyerID := range req.Invited {
 		if !s.throttler.ShouldCall(buyerID) {
-			s.countsFor(buyerID).skipped.Add(1)
+			if c := s.countsFor(buyerID); c != nil {
+				c.skipped.Add(1)
+			}
 			continue
 		}
 		wg.Add(1)
@@ -119,16 +140,29 @@ func (s *Service) Run(ctx context.Context, req Request) Response {
 	return resp
 }
 
+// countsFor returns the buyer's counters, creating them while under the cap.
+// It returns nil for a buyer beyond the cap, which is counted as untracked.
 func (s *Service) countsFor(buyerID string) *buyerCounts {
 	if v, ok := s.counts.Load(buyerID); ok {
 		return v.(*buyerCounts)
 	}
-	v, _ := s.counts.LoadOrStore(buyerID, &buyerCounts{})
+	if s.tracked.Add(1) > int64(s.maxBuyers) {
+		s.tracked.Add(-1)
+		s.untracked.Add(1)
+		return nil
+	}
+	v, loaded := s.counts.LoadOrStore(buyerID, &buyerCounts{})
+	if loaded {
+		s.tracked.Add(-1)
+	}
 	return v.(*buyerCounts)
 }
 
 func (s *Service) countResult(buyerID string, result throttler.Result) {
 	c := s.countsFor(buyerID)
+	if c == nil {
+		return
+	}
 	switch result {
 	case throttler.ResultOK:
 		c.ok.Add(1)
@@ -139,6 +173,64 @@ func (s *Service) countResult(buyerID string, result throttler.Result) {
 	}
 }
 
+// BuyerTotals are one buyer's cumulative call outcomes since the process started.
+type BuyerTotals struct {
+	BuyerID string
+	Calls   int64 // ok + failed + timeout
+	Skipped int64
+	OK      int64
+	Failed  int64
+	Timeout int64
+}
+
+// Totals returns cumulative per-buyer totals sorted by buyer ID, and the number
+// of calls for buyers beyond the cap. Totals never reset, so they are valid
+// Prometheus counters.
+func (s *Service) Totals() ([]BuyerTotals, int64) {
+	var out []BuyerTotals
+	s.counts.Range(func(k, v any) bool {
+		c := v.(*buyerCounts)
+		t := BuyerTotals{
+			BuyerID: k.(string),
+			Skipped: c.skipped.Load(),
+			OK:      c.ok.Load(),
+			Failed:  c.failed.Load(),
+			Timeout: c.timeout.Load(),
+		}
+		t.Calls = t.OK + t.Failed + t.Timeout
+		out = append(out, t)
+		return true
+	})
+	sort.Slice(out, func(i, j int) bool { return out[i].BuyerID < out[j].BuyerID })
+	return out, s.untracked.Load()
+}
+
+// Summary returns each buyer's activity since the previous Summary call, sorted
+// by buyer ID. Buyers with no new activity are omitted. Totals are unchanged.
+func (s *Service) Summary() []BuyerSummary {
+	s.summaryMu.Lock()
+	defer s.summaryMu.Unlock()
+
+	totals, _ := s.Totals()
+	var out []BuyerSummary
+	for _, t := range totals {
+		prev := s.last[t.BuyerID]
+		s.last[t.BuyerID] = t
+		d := BuyerSummary{
+			BuyerID: t.BuyerID,
+			Calls:   t.Calls - prev.Calls,
+			Skipped: t.Skipped - prev.Skipped,
+			OK:      t.OK - prev.OK,
+			Failed:  t.Failed - prev.Failed,
+			Timeout: t.Timeout - prev.Timeout,
+		}
+		if d.Calls+d.Skipped > 0 {
+			out = append(out, d)
+		}
+	}
+	return out
+}
+
 // BuyerSummary is one buyer's activity since the previous summary.
 type BuyerSummary struct {
 	BuyerID string
@@ -147,27 +239,4 @@ type BuyerSummary struct {
 	OK      int64
 	Failed  int64
 	Timeout int64
-}
-
-// Summary returns and resets the per-buyer counters, sorted by buyer ID.
-// Buyers with no activity since the last call are omitted.
-func (s *Service) Summary() []BuyerSummary {
-	var out []BuyerSummary
-	s.counts.Range(func(k, v any) bool {
-		c := v.(*buyerCounts)
-		sum := BuyerSummary{
-			BuyerID: k.(string),
-			Skipped: c.skipped.Swap(0),
-			OK:      c.ok.Swap(0),
-			Failed:  c.failed.Swap(0),
-			Timeout: c.timeout.Swap(0),
-		}
-		sum.Calls = sum.OK + sum.Failed + sum.Timeout
-		if sum.Calls+sum.Skipped > 0 {
-			out = append(out, sum)
-		}
-		return true
-	})
-	sort.Slice(out, func(i, j int) bool { return out[i].BuyerID < out[j].BuyerID })
-	return out
 }
