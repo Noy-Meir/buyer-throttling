@@ -19,7 +19,9 @@ every two seconds.
 `ShouldCall` reads an immutable snapshot through an atomic pointer. At rate 0 it returns
 true without a random draw; otherwise it skips when a draw in `[0, 10000)` falls below the
 rate in basis points, and it checks snapshot age against the clock. `Record` adds to an
-atomic counter found in a `sync.Map`. Neither call takes a lock or touches the network.
+atomic counter found in a `sync.Map`. Neither call touches the network. `Record` takes no lock
+for an existing buyer. The creation path takes a lock only when a new buyer is admitted under
+the cap; a new buyer past the cap is rejected without the lock.
 Prometheus reads counters at scrape time, so no labelled metric is updated per call.
 
 Benchmarks (i5-1038NG7, `go test -bench`, mean of three to six runs, 0 allocations):
