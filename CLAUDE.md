@@ -18,11 +18,13 @@ Go 1.22+, Redis 7 + go-redis/v9, Docker multi-stage + docker compose (with healt
 - Record increments LOCAL atomic counters (ok/failed/timeout). No network, no global lock.
 - Background goroutine flushes every 1s with HINCRBY to key stats:{buyer}:{unixMinute}, with TTL of a few minutes.
 - Evaluator evaluates the LAST CLOSED window only, after a 5s grace period. It never backfills missed windows.
-- Evaluator writes state (rate, reason, last_evaluated_window, carry-over) atomically via a Lua script that checks last_evaluated_window (idempotent: re-evaluating the same window is a no-op). A SET NX lock only reduces duplicate work; correctness comes from idempotency.
+- Evaluator writes state atomically via a Lua compare-and-set in the store: the write succeeds only if the stored last_evaluated_window < the window being written (idempotent: re-evaluating the same window is a no-op). The store keeps last_evaluated_window next to the state; the pure core does not. A SET NX lock only reduces duplicate work; correctness comes from idempotency.
+- Stats per window are three counters (ok/failed/timeout) in one hash. Total is derived (ok+failed+timeout), never stored, so failed+timeout > total cannot happen.
 - ShouldCall reads a LOCAL map (atomic). A background goroutine refreshes it from Redis every 2s. The critical path never touches the network.
 
 ## Evaluator rules
-- Core is a PURE function: (windowStats, prevState, config) -> newState. No Redis, no clock, no I/O.
+- Core is a PURE function: Evaluate(windowStats, prevState, params) -> Decision. Decision = {State, FailureRateViolated, TimeoutRateViolated}; the flags let the caller log both violations even though only failure_rate sets the reason. No Redis, no clock, no I/O.
+- State holds rate (bp), reason, carried stats and carried window count. It has NO last_evaluated_window: idempotency is the store's job (see Data flow).
 - ok / failed / timeout are mutually exclusive. failure_rate = failed/total, timeout_rate = timeout/total.
 - Violation if failure_rate >= 0.7 OR timeout_rate >= 0.3 (use >=, "reaches"). Both violated: reason = failure_rate (fixed precedence), log both.
 - Violation at any point (including mid-recovery) -> rate = block level (0.95) immediately.
@@ -47,11 +49,13 @@ Go 1.22+, Redis 7 + go-redis/v9, Docker multi-stage + docker compose (with healt
 
 ## Config (all via env vars, validated at startup, fail fast with clear errors)
 Defaults: failure threshold 0.7, timeout threshold 0.3, min sample 100, block level 0.95, step 0.1, window 1m, flush 1s, state refresh 2s, grace 5s, carry cap 5 windows, max staleness 5m.
-Validation: 0 < block < 1, step > 0, thresholds in (0,1], min sample > 0.
+Validation: 0 < block < 1, step > 0, recovery step <= block level, thresholds in (0,1], min sample > 0. Ratios with more than 4 decimal places are rejected, not rounded.
 
 ## Engineering rules
 - Clock and Random are interfaces, injected. Tests never use time.Sleep.
 - Store is an interface; the evaluator logic must not depend on Redis types.
+- evaluator.Params is separate from config.Config; config.Config.EvaluatorParams() maps between them. The pure evaluator does not import config.
+- The evaluator runner lives in internal/evaluator/runner, not internal/evaluator: the store refers to evaluator.State, so the runner (which uses the store) cannot sit in the same package without an import cycle.
 - Critical path: map read + atomics only. No global mutex on ShouldCall/Record.
 - Run go test -race ./... always. Table-driven tests for all evaluator rules and edge cases.
 - Small, meaningful commits (conventional commits style). No giant final commit.
