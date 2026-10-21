@@ -47,14 +47,15 @@ up, reported separately.
 - **Detection latency:** from a buyer starting to fail to the block. The worst case is almost
   two windows plus grace, about 25 seconds with a 10-second window and 5-second grace. A failure
   near a window's end leaves that window mostly clean, so the next full window decides. The best
-  case is about 15 seconds. The demo observed about 19 seconds (break at 09:02:46, block logged
-  at 09:03:05).
+  case is about 15 seconds. In a demo run we observed about 19 seconds.
 - **Propagation:** from the evaluator's write to every pod holding the state, within one
   refresh interval (2 seconds). This is the convergence time, which is bounded.
 
 The guarantee we would not give up is that the evaluator never applies the same window twice.
 The compare-and-set writes only if the stored last-evaluated window is older, so two evaluators
-racing on one window cannot both apply a step. The demo runs one evaluator; concurrent
+racing on one window cannot both apply a step. This holds for a single Redis node. Replication
+failover is not covered: with asynchronous replication, a promoted replica can lose the last
+write, and a window could then be applied again. The demo runs one evaluator; concurrent
 evaluators are covered by the store and runner tests.
 
 ## Decisions on the ambiguous cases
@@ -83,6 +84,10 @@ evaluators are covered by the store and runner tests.
 - **Data loss on crash.** Unflushed counts, up to about one second per pod, are lost.
 - **Per-buyer store calls.** Three store round trips per buyer per window: fine for tens of buyers,
   and the reads should be pipelined at thousands.
+- **Full state read per refresh.** Every pod reads every buyer's state each refresh, which is
+  fine for tens of buyers. At thousands it needs a changed-only read.
+- **Expiry is global.** State and the buyers set expire one hour after their last write. The set
+  is shared, so a quiet buyer stays in it while other buyers send traffic.
 - **Window alignment and no backfill.** Window indexes come from each pod's clock, so pods must
   agree within the grace period (NTP), or calls move into a neighbouring window. A paused evaluator
   evaluates only the latest closed window, since replaying old windows would step rates in bursts.
