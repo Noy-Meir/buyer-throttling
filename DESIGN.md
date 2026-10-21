@@ -2,33 +2,25 @@
 
 ## Overview and components
 
-Pods decide per request whether to call each buyer, using a local snapshot of throttle
-rates. The evaluator turns each buyer's recent stats into a rate once per window. Redis
-connects them. The rules are a pure function, `Evaluate(stats, previous, params)`, with
-no clock, I/O or Redis types.
+Pods decide per request whether to call each buyer, from a local snapshot of rates. The
+evaluator turns each buyer's stats into a rate once per window. Redis connects them. The
+rules are a pure function, `Evaluate(stats, previous, params)`, with no I/O.
 
 ## How stats and state flow
 
-Pod to Redis: calls are counted in local atomic counters. Every second they are swapped
-to zero and written with `HINCRBY` into `stats:{buyer}:{window}`. Increments let several
-pods write one window without coordinating.
-
-Redis to evaluator: after each window closes plus a 5-second grace period, the evaluator
-reads and evaluates the latest closed window for every buyer.
-
-Evaluator to Redis to pods: the evaluator writes `state:{buyer}` with a compare-and-set.
-Each pod reloads throttled buyers every two seconds into its snapshot.
+Pods count calls in local atomic counters and every second write them with `HINCRBY` into
+`stats:{buyer}:{window}`, so pods add to one window without coordinating. After each window
+closes plus a 5-second grace period, the evaluator evaluates the latest closed window for
+each buyer and writes `state:{buyer}` with a compare-and-set. Pods reload throttled buyers
+every two seconds.
 
 ## Keeping the per-request check fast
 
-`ShouldCall` loads an immutable snapshot through an atomic pointer and looks the buyer
-up in a map. At rate 0 it returns true without drawing a random number. Otherwise it
-draws an integer in `[0, 10000)` and skips when the draw is below the rate in basis
-points. It also checks snapshot age against the clock.
-
-`Record` loads the buyer's counters from a `sync.Map` and adds to an atomic. Neither
-call takes a lock or touches the network. Prometheus reads the counters at scrape time,
-so no labelled metric is updated on the request path.
+`ShouldCall` reads an immutable snapshot through an atomic pointer. At rate 0 it returns
+true without a random draw; otherwise it skips when a draw in `[0, 10000)` falls below the
+rate in basis points, and it checks snapshot age against the clock. `Record` adds to an
+atomic counter found in a `sync.Map`. Neither call takes a lock or touches the network.
+Prometheus reads counters at scrape time, so no labelled metric is updated per call.
 
 Benchmarks (i5-1038NG7, `go test -bench`, mean of three to six runs, 0 allocations):
 
@@ -37,40 +29,31 @@ Benchmarks (i5-1038NG7, `go test -bench`, mean of three to six runs, 0 allocatio
 | `ShouldCall` | ~116 ns/op | ~26 ns/op |
 | `Record` | ~40 ns/op | ~11 ns/op |
 
-We did not run a 100k requests/s load test. Our evidence is the per-call benchmarks
-above and the absence of network calls and locks on the request path.
+We did not run a 100k requests/s load test. Our evidence is the per-call benchmarks above
+and the absence of network calls and locks on the request path.
 
-The staleness check stays inside `ShouldCall`. If it moved into the refresher goroutine, a hung or dead refresher would never flip the flag, and a pod could enforce an old block forever. Checking at call time avoids that. The alternative is cheaper per call, but we did not measure the clock read alone, and fail-open could then lag by up to one refresh interval.
+The staleness check stays in `ShouldCall`. In the refresher, a hung or dead goroutine would
+never flip the flag, and a pod could enforce an old block forever. The check at call time
+avoids that; its cost is small against the 150 ms budget, and we did not measure the clock
+read alone.
 
 ## How multiple pods stay consistent
 
-Pods agree on the window because it is derived from the clock alone. The index is the
-number of whole windows since the Unix epoch, so every pod and the evaluator compute
-the same index without talking to each other.
+Pods agree on the window because its index is derived from the clock alone. Two delays add
+up, reported separately.
 
-Two delays add up, and we report them separately.
+- **Detection latency:** from a buyer starting to fail to the block. The worst case is almost
+  two windows plus grace, about 25 seconds with a 10-second window and 5-second grace. A failure
+  near a window's end leaves that window mostly clean, so the next full window decides. The best
+  case is about 15 seconds. The demo observed about 19 seconds (break at 09:02:46, block logged
+  at 09:03:05).
+- **Propagation:** from the evaluator's write to every pod holding the state, within one
+  refresh interval (2 seconds). This is the convergence time, which is bounded.
 
-- **Detection latency** is the time from a buyer starting to fail to the evaluator
-  blocking it. The worst case is almost two windows plus the grace period. A failure
-  that starts near the end of a window leaves that window mostly clean, and the window
-  in which it starts may not cross the threshold, so the next full window decides. With
-  the 10-second window and 5-second grace that is about 25 seconds. The best case is
-  about one window plus grace, about 15 seconds. In the demo we observed about 19
-  seconds (break at 09:02:46, block logged at 09:03:05).
-- **Propagation** is the time from the evaluator's write to every pod holding the new
-  state. Each pod picks it up within one refresh interval, 2 seconds by default. This
-  propagation delay is the convergence time: once it has passed, all pods enforce the
-  same rate.
-
-The assignment requires that pods converge on the same view. Convergence here is
-bounded: at most one refresh interval after the evaluator writes.
-
-The guarantee we would not give up is that the evaluator never applies the same window
-twice. The compare-and-set (a Lua script) writes only if the stored last-evaluated
-window is older than the one being written. Timing varies, but each step is still
-correct, so two evaluators racing on one window cannot both apply a step. The demo
-runs a single evaluator, so concurrent evaluators are covered by the store and runner
-tests, not by the demo.
+The guarantee we would not give up is that the evaluator never applies the same window twice.
+The compare-and-set writes only if the stored last-evaluated window is older, so two evaluators
+racing on one window cannot both apply a step. The demo runs one evaluator; concurrent
+evaluators are covered by the store and runner tests.
 
 ## Decisions on the ambiguous cases
 
@@ -87,21 +70,17 @@ tests, not by the demo.
 
 ## Trade-offs and known limitations
 
-- **Low-volume buyers oscillate.** A throttled buyer with too little traffic reaches the
-  carry cap before its sample can be judged, and then steps down on a timer. If it is
-  still failing, it snaps back to block once its carried sample reaches the minimum.
-  The damage it does is proportional to its participation. Holding its rate at the cap
-  would bring back the stuck-forever problem. Before changing the rule, we would measure
-  how many real buyers fall below the minimum while blocked, and what latency or revenue
-  they cost. Then we would consider a lower minimum or a longer cap for them.
-- **Flush skew.** A batch is attributed to the window current at flush time, so calls
-  made just before a boundary can land one window late. The skew is at most one flush
-  interval (1 second).
-- **Data loss on crash.** Counts not yet flushed, at most about one second per pod, are
-  lost if the pod crashes.
-- **Per-buyer store calls.** The evaluator makes three store round trips per buyer per
-  window. This is fine for tens of buyers. At thousands, the reads should be pipelined.
-- **Clock skew.** Window indexes come from each pod's own clock, so pods are assumed to
-  agree within the grace period (NTP). Larger skew moves calls into a neighbouring window.
-- **No backfill.** A paused evaluator skips the windows it missed and evaluates only the
-  latest closed one. Replaying old windows would step rates in bursts.
+- **Low-volume buyers oscillate.** A throttled buyer with too little traffic hits the carry
+  cap before it can be judged, then steps down on a timer. If still failing, it snaps back to
+  block once its carried sample reaches the minimum. Its damage is proportional to its
+  participation, and holding at the cap would bring back the stuck-forever problem. Before
+  changing the rule, we would measure how many real buyers fall below the minimum while blocked
+  and what they cost, then consider a lower minimum or a longer cap for them.
+- **Flush skew.** A batch takes the window current at flush time, so calls just before a boundary
+  can land one window late, by at most one second.
+- **Data loss on crash.** Unflushed counts, up to about one second per pod, are lost.
+- **Per-buyer store calls.** Three store round trips per buyer per window: fine for tens of buyers,
+  and the reads should be pipelined at thousands.
+- **Window alignment and no backfill.** Window indexes come from each pod's clock, so pods must
+  agree within the grace period (NTP), or calls move into a neighbouring window. A paused evaluator
+  evaluates only the latest closed window, since replaying old windows would step rates in bursts.
