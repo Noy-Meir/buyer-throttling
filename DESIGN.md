@@ -30,12 +30,15 @@ points. It also checks snapshot age against the clock.
 call takes a lock or touches the network. Prometheus reads the counters at scrape time,
 so no labelled metric is updated on the request path.
 
-Benchmarks (i5-1038NG7, `go test -bench`, mean of three runs, 0 allocations):
+Benchmarks (i5-1038NG7, `go test -bench`, mean of three to six runs, 0 allocations):
 
 | Call | 1 core | 8 cores (parallel) |
 |---|---|---|
-| `ShouldCall` | ~117 ns/op | ~21 ns/op |
-| `Record` | ~37 ns/op | ~9 ns/op |
+| `ShouldCall` | ~116 ns/op | ~26 ns/op |
+| `Record` | ~40 ns/op | ~11 ns/op |
+
+We did not run a 100k requests/s load test. Our evidence is the per-call benchmarks
+above and the absence of network calls and locks on the request path.
 
 The staleness check stays inside `ShouldCall`. If it moved into the refresher goroutine, a hung or dead refresher would never flip the flag, and a pod could enforce an old block forever. Checking at call time avoids that. The alternative is cheaper per call, but we did not measure the clock read alone, and fail-open could then lag by up to one refresh interval.
 
