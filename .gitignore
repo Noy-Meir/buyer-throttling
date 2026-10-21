@@ -18,3 +18,6 @@ vendor/
 # Local tooling and OS/IDE noise
 .DS_Store
 .idea/
+
+# Coverage profile from the audit
+cover.out
